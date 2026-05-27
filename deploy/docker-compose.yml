@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  # 后端服务
+  backend:
+    build:
+      context: ../after
+      dockerfile: ../deploy/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./family_tree.db
+      - SERVER_URL=http://your-domain.com:8000
+    volumes:
+      - ../after/family_tree.db:/app/family_tree.db
+    restart: always
+
+  # 前端服务
+  frontend:
+    build:
+      context: ../front
+      dockerfile: ../deploy/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: always
+
+  # 如果需要使用 MySQL
+  # mysql:
+  #   image: mysql:8.0
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: your_password
+  #     MYSQL_DATABASE: family_tree
+  #   volumes:
+  #     - mysql_data:/var/lib/mysql
+  #   ports:
+  #     - "3306:3306"
+
+# volumes:
+#   mysql_data:
+

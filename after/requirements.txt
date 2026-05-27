@@ -1,0 +1,21 @@
+# FastAPI 核心依赖
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.20
+
+# 数据库相关
+sqlalchemy==2.0.23
+pymysql==1.1.0
+cryptography==41.0.7
+
+# 环境变量管理
+python-dotenv==1.0.0
+
+# 图关系处理
+networkx==3.2.1
+
+# 数据验证（FastAPI 已包含，但明确列出版本）
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+
