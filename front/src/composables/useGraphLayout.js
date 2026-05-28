@@ -26,9 +26,15 @@ const GRAPH_STYLE = {
  */
 export async function layoutGraph(graph) {
   const model = buildFamilyModel(graph)
-  const layout = graph.view_mode === 'overview'
-    ? layoutOverview(model)
-    : layoutGenealogy(model, graph.view_mode)
+  const layouts = {
+    mainline: layoutMainline,
+    inlaw: layoutInlaw,
+    bridge: layoutBridge,
+    branch: layoutBranch,
+    overview: layoutOverview
+  }
+  const layoutFactory = layouts[model.viewMode] || layoutMainline
+  const layout = layoutFactory(model)
   return {
     nodes: layout.nodes,
     edges: layout.edges
@@ -41,12 +47,13 @@ export async function layoutGraph(graph) {
  * 构建人物、家庭和亲子关系索引。
  */
 function buildFamilyModel(graph) {
+  const viewMode = graph.view_mode || 'mainline'
   const persons = graph.nodes.filter(node => node.type === 'person')
   const personMap = new Map(persons.map(person => [person.id, person]))
   const familyMap = new Map(
     graph.nodes
       .filter(node => node.type === 'familyUnit')
-      .map(unit => [unit.id, createFamily(unit.id)])
+      .map(unit => [unit.id, createFamily(unit.id, unit)])
   )
   const spousePairs = []
   const directParentEdges = []
@@ -72,15 +79,22 @@ function buildFamilyModel(graph) {
   foldSpousePairs(spousePairs, familyMap)
   foldDirectParentEdges(directParentEdges, familyMap)
 
-  return buildModelIndexes(personMap, familyMap)
+  const model = buildModelIndexes(personMap, familyMap)
+  return {
+    ...model,
+    viewMode,
+    centerPersonId: graph.center_person_id || null
+  }
 }
 
 /**
  * 创建家庭索引项。
  */
-function createFamily(id) {
+function createFamily(id, raw = null) {
   return {
     id,
+    raw,
+    displayOrder: Number(raw?.display_order || raw?.displayOrder || 0),
     partners: [],
     children: []
   }
@@ -133,6 +147,8 @@ function buildModelIndexes(personMap, familyMap) {
   const parentFamiliesByChild = new Map()
 
   familyMap.forEach(family => {
+    family.partners.sort((a, b) => comparePersons(personMap.get(a), personMap.get(b)))
+    family.children.sort((a, b) => comparePersons(personMap.get(a), personMap.get(b)))
     family.partners.forEach(personId => {
       pushToMap(partnerFamiliesByPerson, personId, family.id)
     })
@@ -145,8 +161,12 @@ function buildModelIndexes(personMap, familyMap) {
     familyIds.sort((a, b) => {
       const familyA = familyMap.get(a)
       const familyB = familyMap.get(b)
-      return familyB.children.length - familyA.children.length
+      return familyB.children.length - familyA.children.length || compareFamilies(familyA, familyB)
     })
+  })
+
+  parentFamiliesByChild.forEach(familyIds => {
+    familyIds.sort((a, b) => compareFamilies(familyMap.get(a), familyMap.get(b)))
   })
 
   return {
@@ -192,6 +212,63 @@ function pushToMap(map, key, value) {
 // --- 家谱布局 --- //
 
 /**
+ * 创建本家主线二维投影。
+ */
+function layoutMainline(model) {
+  if (!model.centerPersonId || !model.personMap.has(model.centerPersonId)) {
+    return layoutGenealogy(model)
+  }
+
+  const state = createLayoutState(model)
+  const centerLevel = getAncestorDepth(model, model.centerPersonId, new Set())
+  placePerson(state, model.centerPersonId, 0, TOP_PADDING + centerLevel * LEVEL_GAP)
+  layoutAncestorFamilies(state, model.centerPersonId, 0, centerLevel, new Set())
+  layoutDescendantFamilies(state, model.centerPersonId, 0, centerLevel, new Set())
+  layoutRemainingPersons(state, PERSON_SIZE.width + FAMILY_GAP)
+  return {
+    nodes: state.nodes,
+    edges: state.edges
+  }
+}
+
+/**
+ * 创建姻亲谱系二维投影。
+ */
+function layoutInlaw(model) {
+  return layoutMainline(model)
+}
+
+/**
+ * 创建联姻桥接二维投影。
+ */
+function layoutBridge(model) {
+  const centralFamily = findBridgeFamily(model)
+  if (!centralFamily) return layoutMainline(model)
+
+  const state = createLayoutState(model)
+  const partnerY = TOP_PADDING + LEVEL_GAP
+  const partners = orderPartners(centralFamily.partners, model.centerPersonId)
+  const partnerPositions = placePartners(state, partners, 0, partnerY, model.centerPersonId)
+  const familyCenter = getFamilyCenter(partnerPositions, 0)
+  const anchor = createFamilyAnchor(state, centralFamily.id, familyCenter.x, partnerY)
+  state.placedFamilies.add(centralFamily.id)
+  addSpouseEdge(state, centralFamily.id, partners)
+  layoutBridgeAncestors(state, partners)
+  layoutBridgeChildren(state, centralFamily, anchor, partnerY)
+  return {
+    nodes: state.nodes,
+    edges: state.edges
+  }
+}
+
+/**
+ * 创建后代分支二维投影。
+ */
+function layoutBranch(model) {
+  return layoutGenealogy(model)
+}
+
+/**
  * 创建正式家谱布局数据。
  */
 function layoutGenealogy(model) {
@@ -217,21 +294,20 @@ function layoutGenealogy(model) {
  */
 function layoutOverview(model) {
   const state = createLayoutState(model)
-  const components = findConnectedComponents(model)
-  const columns = Math.max(1, Math.ceil(Math.sqrt(components.length || 1)))
-  const clusterWidth = 760
-  const clusterHeight = 520
+  const clusters = findOverviewClusters(model)
+  const columns = Math.max(1, Math.ceil(Math.sqrt(clusters.length || 1)))
+  const clusterWidth = 820
+  const clusterHeight = 560
 
-  components.forEach((component, index) => {
+  clusters.forEach((cluster, index) => {
     const origin = {
       x: (index % columns) * clusterWidth,
       y: Math.floor(index / columns) * clusterHeight
     }
-    layoutOverviewComponent(state, component, origin)
+    layoutOverviewComponent(state, cluster.personIds, origin)
   })
 
-  layoutOverviewRemainingPersons(state, components.length, columns, clusterWidth, clusterHeight)
-  addOverviewEdges(state)
+  layoutOverviewRemainingPersons(state, clusters.length, columns, clusterWidth, clusterHeight)
   return {
     nodes: state.nodes,
     edges: state.edges
@@ -259,9 +335,52 @@ function findRootFamilies(model) {
   const roots = [...model.familyMap.values()]
     .filter(family => family.partners.length > 0)
     .filter(family => family.partners.every(personId => !model.parentFamiliesByChild.has(personId)))
+    .sort(compareFamilies)
     .map(family => family.id)
 
   return roots.length ? roots : [...model.familyMap.keys()]
+}
+
+/**
+ * 估算人物到顶层祖先的层数。
+ */
+function getAncestorDepth(model, personId, visitedPeople) {
+  if (visitedPeople.has(personId)) return 0
+  visitedPeople.add(personId)
+  const parentFamilyId = model.parentFamiliesByChild.get(personId)?.[0]
+  const parentFamily = model.familyMap.get(parentFamilyId)
+  if (!parentFamily?.partners.length) return 0
+  const depth = 1 + Math.max(
+    ...parentFamily.partners.map(parentId => getAncestorDepth(model, parentId, visitedPeople))
+  )
+  visitedPeople.delete(personId)
+  return depth
+}
+
+/**
+ * 子女排序时把主线人物固定在中心，其他人按稳定字段排列。
+ */
+function orderChildren(children, primaryChildId, model) {
+  const ordered = [...children].sort((a, b) => (
+    comparePersons(model.personMap.get(a), model.personMap.get(b))
+  ))
+  if (!primaryChildId || !ordered.includes(primaryChildId)) return ordered
+
+  const others = ordered.filter(childId => childId !== primaryChildId)
+  const middle = Math.floor(others.length / 2)
+  return [
+    ...others.slice(0, middle),
+    primaryChildId,
+    ...others.slice(middle)
+  ]
+}
+
+/**
+ * 按显示顺序和家庭 ID 排列家庭。
+ */
+function compareFamilies(left, right) {
+  return Number(left.displayOrder || 0) - Number(right.displayOrder || 0) ||
+    String(left.id).localeCompare(String(right.id))
 }
 
 /**
@@ -276,42 +395,187 @@ function layoutRemainingPersons(state, startX) {
   })
 }
 
+/**
+ * 布局中心人物向上的父母家庭。
+ */
+function layoutAncestorFamilies(state, personId, x, level, visitedFamilies) {
+  const parentFamilyId = state.parentFamiliesByChild.get(personId)?.[0]
+  if (!parentFamilyId || visitedFamilies.has(parentFamilyId) || state.placedFamilies.has(parentFamilyId)) return
+
+  const family = state.familyMap.get(parentFamilyId)
+  if (!family) return
+
+  visitedFamilies.add(parentFamilyId)
+  state.placedFamilies.add(parentFamilyId)
+
+  const parentY = TOP_PADDING + (level - 1) * LEVEL_GAP
+  const partners = orderPartners(family.partners)
+  const partnerPositions = placePartners(state, partners, x, parentY)
+  const familyCenter = getFamilyCenter(partnerPositions, x)
+  const anchor = createFamilyAnchor(state, parentFamilyId, familyCenter.x, parentY)
+  addSpouseEdge(state, parentFamilyId, partners)
+
+  const childPositions = layoutFamilyChildrenOnLevel(
+    state,
+    family,
+    personId,
+    x,
+    level,
+    false,
+    visitedFamilies
+  )
+  addFamilyChildEdges(state, parentFamilyId, anchor, childPositions, level - 1)
+
+  partners.forEach(parentId => {
+    layoutAncestorFamilies(state, parentId, state.positions.get(parentId)?.x || x, level - 1, visitedFamilies)
+  })
+  visitedFamilies.delete(parentFamilyId)
+}
+
+/**
+ * 布局中心人物向下的子女家庭。
+ */
+function layoutDescendantFamilies(state, personId, x, level, visitedFamilies) {
+  const familyIds = state.partnerFamiliesByPerson.get(personId) || []
+  familyIds.forEach((familyId, index) => {
+    if (visitedFamilies.has(familyId) || state.placedFamilies.has(familyId)) return
+    const offset = (index - (familyIds.length - 1) / 2) * (PERSON_SIZE.width + PARTNER_GAP + SIBLING_GAP)
+    layoutFamilyFromAnchorPerson(state, familyId, personId, x + offset, level, visitedFamilies)
+  })
+}
+
+/**
+ * 在指定人物位置上展开一个配偶家庭。
+ */
+function layoutFamilyFromAnchorPerson(state, familyId, anchorPersonId, x, level, visitedFamilies) {
+  const family = state.familyMap.get(familyId)
+  if (!family) return null
+
+  visitedFamilies.add(familyId)
+  state.placedFamilies.add(familyId)
+
+  const y = TOP_PADDING + level * LEVEL_GAP
+  placePerson(state, anchorPersonId, x, y)
+  const partners = orderPartners(family.partners, anchorPersonId)
+  const partnerPositions = placePartners(state, partners, x, y, anchorPersonId)
+  const familyCenter = getFamilyCenter(partnerPositions, x)
+  const anchor = createFamilyAnchor(state, familyId, familyCenter.x, y)
+  addSpouseEdge(state, familyId, partners)
+
+  const childPositions = layoutFamilyChildrenOnLevel(
+    state,
+    family,
+    null,
+    familyCenter.x,
+    level + 1,
+    true,
+    visitedFamilies
+  )
+  addFamilyChildEdges(state, familyId, anchor, childPositions, level)
+  childPositions.forEach(({ childId, position }) => {
+    layoutDescendantFamilies(state, childId, position.x, level + 1, visitedFamilies)
+  })
+
+  visitedFamilies.delete(familyId)
+  return anchor
+}
+
+/**
+ * 把一个家庭的子女放到指定代际，主线人物始终对齐下行线。
+ */
+function layoutFamilyChildrenOnLevel(state, family, primaryChildId, centerX, level, includeSpouseSubtree, visitedFamilies) {
+  const children = orderChildren(family.children, primaryChildId, state)
+  const childWidths = children.map(childId => {
+    if (childId === primaryChildId) return PERSON_SIZE.width
+    if (!includeSpouseSubtree || state.positions.has(childId)) return PERSON_SIZE.width
+    return measurePersonSubtree(state, childId, visitedFamilies)
+  })
+  const totalWidth = getTotalWidth(childWidths, SIBLING_GAP)
+  const primaryIndex = children.indexOf(primaryChildId)
+  const primaryOffset = primaryIndex >= 0
+    ? childWidths.slice(0, primaryIndex).reduce((sum, width) => sum + width + SIBLING_GAP, 0) + childWidths[primaryIndex] / 2
+    : totalWidth / 2
+  let cursor = centerX - primaryOffset
+  const childPositions = []
+
+  children.forEach((childId, index) => {
+    const childWidth = childWidths[index]
+    const x = cursor + childWidth / 2
+    const position = includeSpouseSubtree && !state.positions.has(childId)
+      ? layoutPersonSubtree(state, childId, cursor, level, visitedFamilies)
+      : placePerson(state, childId, x, TOP_PADDING + level * LEVEL_GAP)
+    if (position) childPositions.push({ childId, position })
+    cursor += childWidth + SIBLING_GAP
+  })
+
+  return childPositions
+}
+
+/**
+ * 为桥接图选择中间婚姻家庭。
+ */
+function findBridgeFamily(model) {
+  const families = [...model.familyMap.values()]
+    .filter(family => family.partners.length >= 2)
+    .sort(compareFamilies)
+  if (!model.centerPersonId) return families[0]
+  return families.find(family => family.partners.includes(model.centerPersonId)) || families[0]
+}
+
+/**
+ * 布局桥接图左右两侧近祖先。
+ */
+function layoutBridgeAncestors(state, partnerIds) {
+  partnerIds.forEach(personId => {
+    const position = state.positions.get(personId)
+    if (!position) return
+    layoutAncestorFamilies(state, personId, position.x, 1, new Set())
+  })
+}
+
+/**
+ * 布局桥接家庭的共同子女。
+ */
+function layoutBridgeChildren(state, family, anchor, partnerY) {
+  const childPositions = layoutFamilyChildrenOnLevel(
+    state,
+    family,
+    null,
+    anchor.x,
+    2,
+    false,
+    new Set()
+  )
+  addFamilyChildEdges(state, family.id, anchor, childPositions, (partnerY - TOP_PADDING) / LEVEL_GAP)
+}
+
 // --- 全景布局 --- //
 
 /**
- * 查找全景图中的连通分量。
+ * 查找全景图索引簇，全景默认不连全量关系线。
  */
-function findConnectedComponents(model) {
-  const adjacency = new Map(model.persons.map(person => [person.id, new Set()]))
-  model.familyMap.forEach(family => {
-    const members = [...family.partners, ...family.children].filter(id => adjacency.has(id))
-    members.forEach(source => {
-      members.forEach(target => {
-        if (source !== target) adjacency.get(source).add(target)
-      })
-    })
-  })
+function findOverviewClusters(model) {
+  const familyClusters = [...model.familyMap.values()]
+    .map(family => ({
+      id: family.id,
+      personIds: [...family.partners, ...family.children]
+        .filter(id => model.personMap.has(id))
+        .sort((a, b) => comparePersons(model.personMap.get(a), model.personMap.get(b))),
+      displayOrder: family.displayOrder
+    }))
+    .filter(cluster => cluster.personIds.length > 0)
+    .sort((a, b) => Number(a.displayOrder || 0) - Number(b.displayOrder || 0) || a.id.localeCompare(b.id))
 
-  const visited = new Set()
-  const components = []
+  const seen = new Set()
+  const clusters = familyClusters.map(cluster => {
+    cluster.personIds.forEach(personId => seen.add(personId))
+    return cluster
+  })
   model.persons.forEach(person => {
-    if (visited.has(person.id)) return
-    const queue = [person.id]
-    const ids = []
-    visited.add(person.id)
-    while (queue.length) {
-      const id = queue.shift()
-      ids.push(id)
-      adjacency.get(id)?.forEach(nextId => {
-        if (visited.has(nextId)) return
-        visited.add(nextId)
-        queue.push(nextId)
-      })
-    }
-    components.push(ids.sort((a, b) => comparePersons(model.personMap.get(a), model.personMap.get(b))))
+    if (seen.has(person.id)) return
+    clusters.push({ id: `person:${person.id}`, personIds: [person.id], displayOrder: 9999 })
   })
-
-  return components.sort((a, b) => b.length - a.length || a[0].localeCompare(b[0]))
+  return clusters
 }
 
 /**
@@ -423,69 +687,6 @@ function placeOverviewPerson(state, personId, x, y) {
   state.placedPersons.add(personId)
   state.nodes.push(toPersonNode(person, position, OVERVIEW_PERSON_SIZE))
   return position
-}
-
-/**
- * 生成全景关系线。
- */
-function addOverviewEdges(state) {
-  state.familyMap.forEach(family => {
-    addOverviewSpouseEdges(state, family)
-    addOverviewChildEdges(state, family)
-  })
-}
-
-/**
- * 生成全景配偶线。
- */
-function addOverviewSpouseEdges(state, family) {
-  if (family.partners.length < 2) return
-  for (let index = 0; index < family.partners.length - 1; index += 1) {
-    const source = family.partners[index]
-    const target = family.partners[index + 1]
-    if (!state.positions.has(source) || !state.positions.has(target)) continue
-    state.edges.push({
-      id: `overview:spouse:${family.id}:${source}:${target}`,
-      source,
-      target,
-      label: '',
-      type: 'line',
-      relation: 'spouse',
-      style: treeLineStyle(1.6)
-    })
-  }
-}
-
-/**
- * 生成全景亲子线。
- */
-function addOverviewChildEdges(state, family) {
-  const parents = family.partners.filter(id => state.positions.has(id))
-  const children = family.children.filter(id => state.positions.has(id))
-  if (!parents.length || !children.length) return
-
-  const parentCenter = averagePosition(state, parents)
-  children.forEach(childId => {
-    addRoutedLine(
-      state,
-      `overview:child:${family.id}:${childId}`,
-      parentCenter,
-      state.positions.get(childId),
-      'child',
-      'overview-link'
-    )
-  })
-}
-
-/**
- * 计算一组人物的平均位置。
- */
-function averagePosition(state, personIds) {
-  const points = personIds.map(id => state.positions.get(id)).filter(Boolean)
-  return {
-    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
-    y: points.reduce((sum, point) => sum + point.y, 0) / points.length
-  }
 }
 
 /**
@@ -718,23 +919,28 @@ function addFamilyChildEdges(state, familyId, anchor, childPositions, level) {
   const childXs = childPositions.map(child => child.position.x)
   const busStartX = Math.min(anchor.x, ...childXs)
   const busEndX = Math.max(anchor.x, ...childXs)
+  const stemStartY = childPositions.length === 1
+    ? parentY + PERSON_SIZE.height / 2
+    : parentY
 
   addRoutedLine(
     state,
     `child:${familyId}:parent-stem`,
-    { x: anchor.x, y: parentY },
+    { x: anchor.x, y: stemStartY },
     { x: anchor.x, y: busY },
     'child',
     'parent-stem'
   )
-  addRoutedLine(
-    state,
-    `child:${familyId}:sibling-bus`,
-    { x: busStartX, y: busY },
-    { x: busEndX, y: busY },
-    'child',
-    'sibling-bus'
-  )
+  if (childPositions.length > 1) {
+    addRoutedLine(
+      state,
+      `child:${familyId}:sibling-bus`,
+      { x: busStartX, y: busY },
+      { x: busEndX, y: busY },
+      'child',
+      'sibling-bus'
+    )
+  }
 
   childPositions.forEach(({ childId, position }) => {
     addRoutedLine(

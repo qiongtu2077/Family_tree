@@ -24,6 +24,9 @@ def get_driver():
         _driver = GraphDatabase.driver(
             settings.neo4j_uri,
             auth=(settings.neo4j_user, settings.neo4j_password),
+            connection_timeout=5,
+            connection_acquisition_timeout=5,
+            max_transaction_retry_time=3,
         )
     return _driver
 

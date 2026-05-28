@@ -279,15 +279,103 @@ function findSpouseLink(personId) {
  */
 function findBranchTarget(personId) {
   const graph = data.graph.value
-  const familyEdge = graph.edges.find(edge => (
-    edge.source === personId &&
-    edge.target?.startsWith?.('family:')
+  const index = buildFamilyIndex(graph)
+  const ownFamilyId = index.partnerFamiliesByPerson.get(personId)?.find(familyId => (
+    index.childrenByFamily.get(familyId)?.length
   ))
-  if (familyEdge) {
-    return { rootType: 'familyUnit', rootId: familyEdge.target }
-  }
+  if (ownFamilyId) return { rootType: 'familyUnit', rootId: ownFamilyId }
+
+  const ancestorFamilyId = findAncestorBranchRoot(index, personId)
+  if (ancestorFamilyId) return { rootType: 'familyUnit', rootId: ancestorFamilyId }
+
   if (personId) return { rootType: 'person', rootId: personId }
   return null
+}
+
+/**
+ * 构建当前图中的家庭关系索引，供视图切换选择根节点。
+ */
+function buildFamilyIndex(graph) {
+  const familyOrders = new Map()
+  const childrenByFamily = new Map()
+  const partnersByFamily = new Map()
+  const partnerFamiliesByPerson = new Map()
+  const parentFamiliesByChild = new Map()
+
+  graph.nodes
+    .filter(node => node.type === 'familyUnit')
+    .forEach(node => {
+      familyOrders.set(node.id, Number(node.display_order || node.displayOrder || 0))
+    })
+
+  graph.edges.forEach(edge => {
+    if (edge.target?.startsWith?.('family:')) {
+      pushIndex(partnersByFamily, edge.target, edge.source)
+      pushIndex(partnerFamiliesByPerson, edge.source, edge.target)
+      return
+    }
+    if (edge.source?.startsWith?.('family:')) {
+      pushIndex(childrenByFamily, edge.source, edge.target)
+      pushIndex(parentFamiliesByChild, edge.target, edge.source)
+    }
+  })
+
+  return {
+    childrenByFamily,
+    partnersByFamily,
+    partnerFamiliesByPerson,
+    parentFamiliesByChild,
+    familyOrders
+  }
+}
+
+/**
+ * 找到能覆盖当前人物的最上层祖先家庭，避免无后代人物切到空分支。
+ */
+function findAncestorBranchRoot(index, personId) {
+  const candidates = [...index.childrenByFamily.keys()]
+    .filter(familyId => familyContainsDescendant(index, familyId, personId, new Set()))
+    .sort((left, right) => compareFamilyOrder(index, left, right))
+
+  const rootCandidate = candidates.find(familyId => (
+    (index.partnersByFamily.get(familyId) || []).every(partnerId => (
+      !index.parentFamiliesByChild.has(partnerId)
+    ))
+  ))
+  return rootCandidate || index.parentFamiliesByChild.get(personId)?.[0] || null
+}
+
+/**
+ * 判断某个家庭单元向下展开后是否包含指定人物。
+ */
+function familyContainsDescendant(index, familyId, personId, visitedFamilies) {
+  if (visitedFamilies.has(familyId)) return false
+  visitedFamilies.add(familyId)
+
+  const children = index.childrenByFamily.get(familyId) || []
+  if (children.includes(personId)) return true
+
+  return children.some(childId => (
+    (index.partnerFamiliesByPerson.get(childId) || []).some(childFamilyId => (
+      familyContainsDescendant(index, childFamilyId, personId, visitedFamilies)
+    ))
+  ))
+}
+
+/**
+ * 按家庭显示顺序和 ID 稳定排序。
+ */
+function compareFamilyOrder(index, left, right) {
+  return Number(index.familyOrders.get(left) || 0) - Number(index.familyOrders.get(right) || 0) ||
+    String(left).localeCompare(String(right))
+}
+
+/**
+ * 向索引数组桶添加不重复值。
+ */
+function pushIndex(map, key, value) {
+  if (!map.has(key)) map.set(key, [])
+  if (!map.get(key).includes(value)) map.get(key).push(value)
 }
 
 /**

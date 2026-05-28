@@ -92,38 +92,50 @@ class GraphRepository:
     def get_branch_graph(self, family_unit_id: str, depth: int) -> dict[str, Any] | None:
         """读取某个家庭单元向下展开的后代分支图。"""
         branch_depth = _safe_depth(depth)
-        query = f"""
-        MATCH (root:FamilyUnit {{familyUnitId: $family_unit_id}})
-        OPTIONAL MATCH (root)<-[:PARTNER_IN]-(partner:Person)
-        OPTIONAL MATCH path=(root)-[:HAS_CHILD|PARENT_OF*1..{branch_depth}]->(descendant:Person)
-        WITH root, collect(DISTINCT partner) AS partners, collect(DISTINCT descendant) AS descendants
-        WITH root, partners + descendants AS raw_people
-        UNWIND raw_people AS person
-        WITH root, collect(DISTINCT person) AS people
-        OPTIONAL MATCH (person:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE person IN people
-        WITH people, collect(DISTINCT unit) + [root] AS units
-        OPTIONAL MATCH (unit)<-[:PARTNER_IN]-(unit_partner:Person)
-        WHERE unit IN units
-        WITH people + collect(DISTINCT unit_partner) AS raw_people, units
-        UNWIND raw_people AS person
-        WITH collect(DISTINCT person) AS people, units
-        OPTIONAL MATCH (p:Person)-[partner_rel:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE p IN people AND unit IN units
-        OPTIONAL MATCH (unit)-[child_rel:HAS_CHILD]->(child:Person)
-        WHERE unit IN units AND child IN people
-        OPTIONAL MATCH (parent:Person)-[parent_rel:PARENT_OF]->(child2:Person)
-        WHERE parent IN people AND child2 IN people
-        RETURN
-          people AS persons,
-          units AS family_units,
-          collect(DISTINCT partner_rel) AS partner_edges,
-          collect(DISTINCT child_rel) AS child_edges,
-          collect(DISTINCT parent_rel) AS parent_edges,
-          [] AS spouse_edges
-        """
-        record = self.session.run(query, family_unit_id=str(family_unit_id)).single()
-        return _record_to_dict(record) if record else None
+        root = self._get_family_unit_node(family_unit_id)
+        if not root:
+            return None
+
+        family_unit_ids = [str(family_unit_id)]
+        person_ids = _unique_ids([
+            dict(person).get("personId")
+            for person in self._get_partners_for_family_units(family_unit_ids)
+        ])
+        frontier_unit_ids = [str(family_unit_id)]
+
+        # 后代分支只沿 FamilyUnit -> HAS_CHILD -> Person -> PARTNER_IN -> FamilyUnit 展开，
+        # 不再把 PARENT_OF 混进可变路径，避免把旁系关系网投影成毛线团。
+        for _ in range(branch_depth):
+            child_ids = self._get_child_person_ids_for_family_units(frontier_unit_ids)
+            new_child_ids = [child_id for child_id in child_ids if child_id not in person_ids]
+            person_ids = _unique_ids([*person_ids, *new_child_ids])
+            if not new_child_ids:
+                break
+
+            child_family_units = self._get_family_units_for_people(new_child_ids)
+            next_unit_ids = _unique_ids([
+                dict(unit).get("familyUnitId")
+                for unit in child_family_units
+                if dict(unit).get("familyUnitId") not in family_unit_ids
+            ])
+            family_unit_ids = _unique_ids([*family_unit_ids, *next_unit_ids])
+            frontier_unit_ids = next_unit_ids
+            if not frontier_unit_ids:
+                break
+
+        partner_ids = _unique_ids([
+            dict(person).get("personId")
+            for person in self._get_partners_for_family_units(family_unit_ids)
+        ])
+        person_ids = _unique_ids([*person_ids, *partner_ids])
+        persons = self._get_people_by_ids(person_ids)
+        family_units = self._get_family_units_by_ids(family_unit_ids)
+        edges = self._get_edges_for_scope(person_ids, family_unit_ids)
+        return {
+            "persons": persons,
+            "family_units": family_units,
+            **edges,
+        }
 
     def get_branch_graph_by_root(
         self,
@@ -234,6 +246,14 @@ class GraphRepository:
         ).single()
         return record["person"] if record else None
 
+    def _get_family_unit_node(self, family_unit_id: str):
+        """读取单个家庭单元节点。"""
+        record = self.session.run(
+            "MATCH (unit:FamilyUnit {familyUnitId: $family_unit_id}) RETURN unit LIMIT 1",
+            family_unit_id=str(family_unit_id),
+        ).single()
+        return record["unit"] if record else None
+
     def _are_spouses_or_partners(
         self,
         person_id: str,
@@ -320,6 +340,19 @@ class GraphRepository:
         """
         return [record["unit"] for record in self.session.run(query, person_ids=person_ids)]
 
+    def _get_family_units_by_ids(self, family_unit_ids: list[str]) -> list[Any]:
+        """按 ID 列表读取家庭单元节点。"""
+        query = """
+        MATCH (unit:FamilyUnit)
+        WHERE unit.familyUnitId IN $family_unit_ids
+        RETURN unit
+        ORDER BY unit.displayOrder, unit.familyUnitId
+        """
+        return [
+            record["unit"]
+            for record in self.session.run(query, family_unit_ids=family_unit_ids)
+        ]
+
     def _get_family_units_touching_people(self, person_ids: list[str]) -> list[Any]:
         """读取人物作为伴侣或子女接触到的家庭单元。"""
         query = """
@@ -347,6 +380,20 @@ class GraphRepository:
             record["person"]
             for record in self.session.run(query, family_unit_ids=family_unit_ids)
         ]
+
+    def _get_child_person_ids_for_family_units(self, family_unit_ids: list[str]) -> list[str]:
+        """读取家庭单元的直接子女 ID。"""
+        query = """
+        MATCH (unit:FamilyUnit)-[:HAS_CHILD]->(child:Person)
+        WHERE unit.familyUnitId IN $family_unit_ids
+        RETURN DISTINCT child.personId AS person_id
+        ORDER BY child.birthDate, child.name, child.personId
+        """
+        return _unique_ids([
+            record["person_id"]
+            for record in self.session.run(query, family_unit_ids=family_unit_ids)
+            if record["person_id"]
+        ])
 
     def _get_people_by_ids(self, person_ids: list[str]) -> list[Any]:
         """按 ID 列表重新读取去重后的人物节点。"""

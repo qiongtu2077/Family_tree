@@ -116,7 +116,58 @@ describe('useGraphLayout', () => {
     expect(visiblePersons).toHaveLength(44)
     expect(familyUnitNodes).toHaveLength(0)
     expect(visiblePersons.every(node => node.label.startsWith('人物'))).toBe(true)
+    expect(data.edges).toHaveLength(0)
     expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
     expect(data.edges.some(edge => edge.style.stroke === '#00a6ff')).toBe(false)
+  })
+
+  it('keeps a single child connection as one vertical line without a fake bus', async () => {
+    const data = await layoutGraph({
+      view_mode: 'branch',
+      nodes: [
+        { id: 'father', type: 'person', name: '父亲' },
+        { id: 'mother', type: 'person', name: '母亲' },
+        { id: 'child', type: 'person', name: '孩子' },
+        { id: 'family:f1', type: 'familyUnit' }
+      ],
+      edges: [
+        { id: 'e1', source: 'father', target: 'family:f1', relation: 'partner' },
+        { id: 'e2', source: 'mother', target: 'family:f1', relation: 'partner' },
+        { id: 'e3', source: 'family:f1', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const childEdges = data.edges.filter(edge => edge.relation === 'child')
+
+    expect(childEdges).toHaveLength(1)
+    expect(childEdges[0].segment).toBe('parent-stem')
+    expect(childEdges.some(edge => edge.segment === 'sibling-bus')).toBe(false)
+    expect(childEdges.every(edge => edge.type === 'line')).toBe(true)
+  })
+
+  it('uses the center person as the bridge marriage anchor', async () => {
+    const data = await layoutGraph({
+      view_mode: 'bridge',
+      center_person_id: 'husband',
+      nodes: [
+        { id: 'husband', type: 'person', name: '丈夫' },
+        { id: 'wife', type: 'person', name: '妻子' },
+        { id: 'child', type: 'person', name: '孩子' },
+        { id: 'family:f1', type: 'familyUnit' }
+      ],
+      edges: [
+        { id: 'e1', source: 'husband', target: 'family:f1', relation: 'partner' },
+        { id: 'e2', source: 'wife', target: 'family:f1', relation: 'partner' },
+        { id: 'e3', source: 'family:f1', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const husband = data.nodes.find(node => node.id === 'husband')
+    const wife = data.nodes.find(node => node.id === 'wife')
+    const child = data.nodes.find(node => node.id === 'child')
+
+    expect(husband.y).toBe(wife.y)
+    expect(child.y).toBeGreaterThan(husband.y)
+    expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
   })
 })
