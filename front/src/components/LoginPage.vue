@@ -7,9 +7,9 @@
       </div>
 
       <div class="demo-card" v-if="!isRegisterMode">
-        <strong>演示账号</strong>
-        <span>管理员：admin / <ROTATED_ADMIN_PASSWORD></span>
-        <span>测试用户：test / <ROTATED_TEST_PASSWORD></span>
+        <strong>账号提示</strong>
+        <span>请使用本地未提交的账号信息登录。</span>
+        <span>如需演示账号，请先运行系统初始化脚本。</span>
       </div>
 
       <p v-if="authError" class="auth-error">{{ authError }}</p>
@@ -20,7 +20,7 @@
           <input
             v-model.trim="loginForm.username"
             type="text"
-            placeholder="admin 或 test"
+            placeholder="请输入账号"
             autocomplete="username"
             @keyup.enter="handleLogin"
           />

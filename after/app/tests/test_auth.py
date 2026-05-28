@@ -4,6 +4,7 @@
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import os
 
 from app.models import Base, User
 from app.routers.auth import hash_password, init_demo_users, serialize_user, verify_password
@@ -11,10 +12,11 @@ from app.routers.auth import hash_password, init_demo_users, serialize_user, ver
 
 def test_password_hash_and_verify():
     """密码哈希后应能通过明文校验。"""
-    hashed = hash_password("<ROTATED_ADMIN_PASSWORD>")
+    sample_password = "unit-test-password"
+    hashed = hash_password(sample_password)
 
-    assert hashed != "<ROTATED_ADMIN_PASSWORD>"
-    assert verify_password("<ROTATED_ADMIN_PASSWORD>", hashed)
+    assert hashed != sample_password
+    assert verify_password(sample_password, hashed)
     assert not verify_password("wrong-password", hashed)
 
 
@@ -39,6 +41,8 @@ def test_serialize_user_excludes_password():
 
 def test_init_demo_users_creates_and_updates_accounts():
     """演示账号初始化应可重复执行。"""
+    os.environ["FAMILYTREE_ADMIN_PASSWORD"] = "unit-test-admin-password"
+    os.environ["FAMILYTREE_TEST_PASSWORD"] = "unit-test-user-password"
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -57,3 +61,5 @@ def test_init_demo_users_creates_and_updates_accounts():
         assert users[1].is_admin is False
     finally:
         db.close()
+        os.environ.pop("FAMILYTREE_ADMIN_PASSWORD", None)
+        os.environ.pop("FAMILYTREE_TEST_PASSWORD", None)

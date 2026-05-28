@@ -9,6 +9,14 @@ const FAMILY_GAP = 138
 const LEVEL_GAP = 128
 const TOP_PADDING = 42
 const CHILD_BUS_OFFSET = 70
+const GRAPH_STYLE = {
+  nodeFill: 'rgba(24, 24, 20, 0.94)',
+  nodeStroke: 'rgba(255, 238, 137, 0.72)',
+  nodeShadow: 'rgba(255, 250, 0, 0.16)',
+  labelFill: '#fff8d6',
+  lineStroke: 'rgba(224, 211, 157, 0.72)',
+  lineShadow: 'rgba(255, 250, 0, 0.08)'
+}
 
 // --- 对外转换 --- //
 
@@ -282,10 +290,11 @@ function layoutFamily(state, familyId, left, level, requiredPersonId, visitedFam
   const centerX = left + width / 2
   const y = TOP_PADDING + level * LEVEL_GAP
   const partners = orderPartners(family.partners, requiredPersonId)
-  const partnerPositions = placePartners(state, partners, centerX, y)
+  const partnerPositions = placePartners(state, partners, centerX, y, requiredPersonId)
+  const familyCenter = getFamilyCenter(partnerPositions, centerX)
   addSpouseEdge(state, familyId, partners)
 
-  const anchor = createFamilyAnchor(state, familyId, centerX, y)
+  const anchor = createFamilyAnchor(state, familyId, familyCenter.x, y)
   layoutChildren(state, family, anchor, left, width, level, visitedFamilies)
 
   visitedFamilies.delete(familyId)
@@ -312,22 +321,27 @@ function layoutPersonSubtree(state, personId, left, level, visitedFamilies) {
 function layoutChildren(state, family, anchor, familyLeft, familyWidth, level, visitedFamilies) {
   const childWidths = family.children.map(childId => measurePersonSubtree(state, childId, visitedFamilies))
   const totalChildrenWidth = getTotalWidth(childWidths, SIBLING_GAP)
-  let cursor = familyLeft + (familyWidth - totalChildrenWidth) / 2
+  const childAreaLeft = anchor.x - totalChildrenWidth / 2
+  const minLeft = familyLeft + (familyWidth - totalChildrenWidth) / 2
+  let cursor = family.children.length === 1 ? childAreaLeft : Math.max(minLeft, childAreaLeft)
+  const childPositions = []
 
   family.children.forEach((childId, index) => {
     const childWidth = childWidths[index]
     const childPosition = layoutPersonSubtree(state, childId, cursor, level + 1, visitedFamilies)
-    if (childPosition) addChildEdge(state, family.id, anchor, childId, childPosition, level)
+    if (childPosition) childPositions.push({ childId, position: childPosition })
     cursor += childWidth + SIBLING_GAP
   })
+
+  addFamilyChildEdges(state, family.id, anchor, childPositions, level)
 }
 
 /**
  * 放置配偶组。
  */
-function placePartners(state, partners, centerX, y) {
+function placePartners(state, partners, centerX, y, requiredPersonId) {
   const width = getPartnerWidth({ partners })
-  let cursor = centerX - width / 2
+  let cursor = requiredPersonId ? centerX - PERSON_SIZE.width / 2 : centerX - width / 2
   return partners.map(personId => {
     const position = placePerson(state, personId, cursor + PERSON_SIZE.width / 2, y)
     cursor += PERSON_SIZE.width + PARTNER_GAP
@@ -356,7 +370,7 @@ function placePerson(state, personId, x, y) {
  */
 function createFamilyAnchor(state, familyId, x, parentY) {
   const id = `anchor:${familyId}`
-  const y = parentY + PERSON_SIZE.height / 2 + CHILD_BUS_OFFSET / 2
+  const y = parentY
   state.nodes.push({
     id,
     x,
@@ -375,6 +389,63 @@ function createFamilyAnchor(state, familyId, x, parentY) {
 }
 
 /**
+ * 计算家庭亲子线下接点。
+ */
+function getFamilyCenter(partnerPositions, fallbackX) {
+  const validPositions = partnerPositions.filter(Boolean)
+  if (!validPositions.length) return { x: fallbackX }
+  if (validPositions.length === 1) return validPositions[0]
+
+  const first = validPositions[0]
+  const last = validPositions[validPositions.length - 1]
+  return {
+    x: (first.x + last.x) / 2
+  }
+}
+
+/**
+ * 添加不可见线段端点。
+ */
+function addLineAnchor(state, id, point) {
+  state.nodes.push({
+    id,
+    x: point.x,
+    y: point.y,
+    type: 'circle',
+    size: 1,
+    label: '',
+    nodeType: 'anchor',
+    style: {
+      opacity: 0,
+      fill: 'transparent',
+      stroke: 'transparent'
+    }
+  })
+}
+
+/**
+ * 添加一条由固定端点控制的家谱线段。
+ */
+function addRoutedLine(state, id, startPoint, endPoint, relation, segment) {
+  if (startPoint.x === endPoint.x && startPoint.y === endPoint.y) return
+
+  const startId = `${id}:start`
+  const endId = `${id}:end`
+  addLineAnchor(state, startId, startPoint)
+  addLineAnchor(state, endId, endPoint)
+  state.edges.push({
+    id,
+    source: startId,
+    target: endId,
+    label: '',
+    type: 'line',
+    relation,
+    segment,
+    style: treeLineStyle(1.8)
+  })
+}
+
+/**
  * 添加配偶水平线。
  */
 function addSpouseEdge(state, familyId, partners) {
@@ -388,29 +459,51 @@ function addSpouseEdge(state, familyId, partners) {
     label: '',
     type: 'line',
     relation: 'spouse',
-    style: treeLineStyle(3.8)
+    style: treeLineStyle(2)
   })
 }
 
 /**
  * 添加家庭到子女的树状分叉线。
  */
-function addChildEdge(state, familyId, anchor, childId, childPosition, level) {
+function addFamilyChildEdges(state, familyId, anchor, childPositions, level) {
+  if (!childPositions.length) return
+
   const parentY = TOP_PADDING + level * LEVEL_GAP
-  const busY = parentY + PERSON_SIZE.height / 2 + CHILD_BUS_OFFSET
-  state.edges.push({
-    id: `child:${familyId}:${childId}`,
-    source: anchor.id,
-    target: childId,
-    targetAnchor: 0,
-    label: '',
-    type: 'polyline',
-    relation: 'child',
-    controlPoints: [
-      { x: anchor.x, y: busY },
-      { x: childPosition.x, y: busY }
-    ],
-    style: treeLineStyle(4.4)
+  const childTopY = Math.min(...childPositions.map(child => child.position.y - PERSON_SIZE.height / 2))
+  const busY = childPositions.length === 1
+    ? childTopY
+    : parentY + PERSON_SIZE.height / 2 + CHILD_BUS_OFFSET
+  const childXs = childPositions.map(child => child.position.x)
+  const busStartX = Math.min(anchor.x, ...childXs)
+  const busEndX = Math.max(anchor.x, ...childXs)
+
+  addRoutedLine(
+    state,
+    `child:${familyId}:parent-stem`,
+    { x: anchor.x, y: parentY },
+    { x: anchor.x, y: busY },
+    'child',
+    'parent-stem'
+  )
+  addRoutedLine(
+    state,
+    `child:${familyId}:sibling-bus`,
+    { x: busStartX, y: busY },
+    { x: busEndX, y: busY },
+    'child',
+    'sibling-bus'
+  )
+
+  childPositions.forEach(({ childId, position }) => {
+    addRoutedLine(
+      state,
+      `child:${familyId}:${childId}:child-stem`,
+      { x: position.x, y: busY },
+      { x: position.x, y: position.y - PERSON_SIZE.height / 2 },
+      'child',
+      'child-stem'
+    )
   })
 }
 
@@ -462,16 +555,16 @@ function toPersonNode(person, position) {
     raw: person,
     size: [PERSON_SIZE.width, PERSON_SIZE.height],
     style: {
-      radius: 4,
-      fill: '#191919',
-      stroke: '#ff3b42',
-      lineWidth: 4,
-      shadowColor: 'rgba(255, 59, 66, 0.18)',
-      shadowBlur: 12
+      radius: 7,
+      fill: GRAPH_STYLE.nodeFill,
+      stroke: GRAPH_STYLE.nodeStroke,
+      lineWidth: 1.8,
+      shadowColor: GRAPH_STYLE.nodeShadow,
+      shadowBlur: 14
     },
     labelCfg: {
       style: {
-        fill: '#f0f0f0',
+        fill: GRAPH_STYLE.labelFill,
         fontSize: 15,
         fontWeight: 800
       }
@@ -484,11 +577,11 @@ function toPersonNode(person, position) {
  */
 function treeLineStyle(lineWidth) {
   return {
-    stroke: '#00a6ff',
+    stroke: GRAPH_STYLE.lineStroke,
     lineWidth,
     endArrow: false,
-    lineAppendWidth: 8,
-    shadowColor: 'rgba(0, 166, 255, 0.18)',
-    shadowBlur: 6
+    lineAppendWidth: 6,
+    shadowColor: GRAPH_STYLE.lineShadow,
+    shadowBlur: 4
   }
 }

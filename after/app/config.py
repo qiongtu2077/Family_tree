@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./family_tree.db"
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "<ROTATED_NEO4J_PASSWORD>"
+    neo4j_password: str = ""
     neo4j_database: str = "neo4j"
     server_url: str = "http://localhost:8000"
 

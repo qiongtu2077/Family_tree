@@ -77,7 +77,7 @@
 /**
  * 族谱系统主视图。
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import GraphIssuePanel from '../components/admin/GraphIssuePanel.vue'
 import FamilyGraphCanvas from '../components/graph/FamilyGraphCanvas.vue'
 import GraphToolbar from '../components/graph/GraphToolbar.vue'
@@ -117,6 +117,13 @@ const viewHints = {
 const currentViewLabel = computed(() => viewLabels[interactions.selectedView.value] || '本家主线图')
 const currentViewHint = computed(() => viewHints[interactions.selectedView.value] || viewHints.mainline)
 
+watch(
+  () => interactions.selectedView.value,
+  async view => {
+    if (view === 'path') await openRelationPanel()
+  }
+)
+
 /**
  * 搜索人物并展示候选。
  */
@@ -154,7 +161,8 @@ async function openAdminPanel() {
  */
 onMounted(async () => {
   const people = await data.loadPeople()
-  const defaultPersonId = normalizePersonId(props.currentUser?.person_id) || people[0]?.id || ''
+  const demoPerson = people.find(person => person.id === 'demo:child')
+  const defaultPersonId = normalizePersonId(props.currentUser?.person_id) || demoPerson?.id || people[0]?.id || ''
   if (!defaultPersonId) return
 
   try {

@@ -18,11 +18,11 @@ describe('auth api', () => {
   it('logs in with username and password', async () => {
     apiClient.post.mockResolvedValue({ data: { success: true, user: { id: 1 } } })
 
-    const result = await login('admin', '<ROTATED_ADMIN_PASSWORD>')
+    const result = await login('admin', 'unit-test-password')
 
     expect(apiClient.post).toHaveBeenCalledWith('/auth/login', {
       username: 'admin',
-      password: '<ROTATED_ADMIN_PASSWORD>'
+      password: 'unit-test-password'
     })
     expect(result.user.id).toBe(1)
   })

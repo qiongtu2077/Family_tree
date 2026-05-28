@@ -182,7 +182,7 @@ Family_tree/
 
 | 类型 | 权限 | 说明 |
 |------|------|------|
-| 👑 管理员 | 增删改查人员、审批注册 | 默认账号：admin / <ROTATED_ADMIN_PASSWORD> |
+| 👑 管理员 | 增删改查人员、审批注册 | 管理员账号由本地环境配置 |
 | 👤 普通用户 | 查看族谱、搜索 | 需注册并通过审批 |
 | 🚶 游客 | 查看族谱、搜索 | 无需登录 |
 
@@ -318,7 +318,7 @@ EMAIL_CONFIG = {
     "smtp_server": "smtp.163.com",
     "smtp_port": 465,
     "sender_email": "your-email@163.com",    # 发送邮箱
-    "sender_password": "<MAIL_APP_PASSWORD>",      # 163邮箱授权码
+    "sender_password": "<mail-app-password>", # 邮箱授权码，仅本地配置
     "admin_email": "<ADMIN_EMAIL>"       # 管理员邮箱
 }
 ```

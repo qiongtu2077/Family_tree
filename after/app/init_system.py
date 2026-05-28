@@ -9,36 +9,18 @@ from .neo4j import get_driver
 from .repositories.person_repository import PersonRepository
 from .routers.auth import hash_password
 from .services.seed_service import SeedService
-
-
-DEMO_ACCOUNTS = [
-    {
-        "username": "admin",
-        "password": "<ROTATED_ADMIN_PASSWORD>",
-        "email": "admin@familytree.local",
-        "real_name": "系统管理员",
-        "is_admin": True,
-        "person_id": None,
-    },
-    {
-        "username": "test",
-        "password": "<ROTATED_TEST_PASSWORD>",
-        "email": "test@familytree.local",
-        "real_name": "测试用户",
-        "is_admin": False,
-        "person_id": None,
-    },
-]
+from .local_accounts import get_demo_accounts
 
 
 def init_sql_accounts() -> dict[str, list[str]]:
     """初始化本地账号数据库和演示账号。"""
     Base.metadata.create_all(bind=engine)
+    demo_accounts = get_demo_accounts()
     created = []
     updated = []
     db = SessionLocal()
     try:
-        for account in DEMO_ACCOUNTS:
+        for account in demo_accounts:
             user = db.query(User).filter(User.username == account["username"]).first()
             payload = {
                 "password": hash_password(account["password"]),

@@ -9,11 +9,11 @@ import os
 
 # 邮件配置（部署时需要修改）
 EMAIL_CONFIG = {
-    "smtp_server": "smtp.163.com",
-    "smtp_port": 465,
-    "sender_email": "",  # 发送邮箱，需要配置
-    "sender_password": "",  # 邮箱授权码，需要配置
-    "admin_email": "<ADMIN_EMAIL>"  # 管理员邮箱
+    "smtp_server": os.getenv("SMTP_SERVER", "smtp.163.com"),
+    "smtp_port": int(os.getenv("SMTP_PORT", "465")),
+    "sender_email": os.getenv("SMTP_SENDER_EMAIL", ""),
+    "sender_password": os.getenv("SMTP_SENDER_PASSWORD", ""),
+    "admin_email": os.getenv("SMTP_ADMIN_EMAIL", ""),
 }
 
 

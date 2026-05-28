@@ -26,7 +26,7 @@ class GraphRepository:
         persons = [center]
         persons.extend(self._get_related_people(person_id, "ancestors", depth))
         persons.extend(self._get_related_people(person_id, "descendants", depth))
-        persons.extend(self._get_siblings(person_id))
+        persons.extend(self._get_siblings_for_lineage(person_id, depth))
         person_ids = _unique_ids([dict(person).get("personId") for person in persons])
 
         family_units = self._get_family_units_for_people(person_ids)
@@ -35,6 +35,9 @@ class GraphRepository:
         persons.extend(partners)
         person_ids = [dict(person).get("personId") for person in persons]
         person_ids = _unique_ids(person_ids)
+        person_ids = self._expand_people_from_family_units(person_ids, family_unit_ids)
+        family_units = self._get_family_units_for_people(person_ids)
+        family_unit_ids = _unique_ids([dict(unit).get("familyUnitId") for unit in family_units])
         persons = self._get_people_by_ids(person_ids)
         edges = self._get_edges_for_scope(person_ids, family_unit_ids)
         return {
@@ -121,7 +124,7 @@ class GraphRepository:
     def _get_person_node(self, person_id: str):
         """读取单个人物节点。"""
         record = self.session.run(
-            "MATCH (person:Person {personId: $person_id}) RETURN person",
+            "MATCH (person:Person {personId: $person_id}) RETURN person LIMIT 1",
             person_id=str(person_id),
         ).single()
         return record["person"] if record else None
@@ -142,14 +145,30 @@ class GraphRepository:
             """
         return [record["person"] for record in self.session.run(query, person_id=str(person_id))]
 
-    def _get_siblings(self, person_id: str) -> list[Any]:
-        """读取中心人物兄弟姐妹。"""
+    def _get_siblings_for_lineage(self, person_id: str, depth: int) -> list[Any]:
+        """读取中心人物及祖先链上人物的兄弟姐妹。"""
+        lineage_ids = self._get_lineage_person_ids(person_id, depth)
         query = """
-        MATCH (center:Person {personId: $person_id})<-[:PARENT_OF]-(parent:Person)-[:PARENT_OF]->(sibling:Person)
-        WHERE sibling <> center
+        MATCH (lineage:Person)
+        WHERE lineage.personId IN $lineage_ids
+        MATCH (lineage)<-[:PARENT_OF]-(parent:Person)-[:PARENT_OF]->(sibling:Person)
+        WHERE sibling <> lineage
         RETURN DISTINCT sibling AS person
         """
-        return [record["person"] for record in self.session.run(query, person_id=str(person_id))]
+        return [record["person"] for record in self.session.run(query, lineage_ids=lineage_ids)]
+
+    def _get_lineage_person_ids(self, person_id: str, depth: int) -> list[str]:
+        """读取中心人物与祖先链人物 ID。"""
+        query = f"""
+        MATCH path=(ancestor:Person)-[:PARENT_OF*0..{depth}]->(:Person {{personId: $person_id}})
+        UNWIND nodes(path) AS person
+        RETURN DISTINCT person.personId AS person_id
+        """
+        return _unique_ids([
+            record["person_id"]
+            for record in self.session.run(query, person_id=str(person_id))
+            if record["person_id"]
+        ])
 
     def _get_family_units_for_people(self, person_ids: list[str]) -> list[Any]:
         """读取人物所属家庭单元。"""
@@ -181,6 +200,31 @@ class GraphRepository:
         ORDER BY person.birthDate, person.name
         """
         return [record["person"] for record in self.session.run(query, person_ids=person_ids)]
+
+    def _expand_people_from_family_units(
+        self,
+        person_ids: list[str],
+        family_unit_ids: list[str],
+    ) -> list[str]:
+        """把家庭单元中的配偶和子女纳入视图人物范围。"""
+        query = """
+        MATCH (person:Person)
+        WHERE person.personId IN $person_ids
+        WITH collect(DISTINCT person.personId) AS seed_ids
+        OPTIONAL MATCH (partner:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
+        WHERE unit.familyUnitId IN $family_unit_ids
+        OPTIONAL MATCH (unit)-[:HAS_CHILD]->(child:Person)
+        WITH seed_ids,
+             collect(DISTINCT partner.personId) AS partner_ids,
+             collect(DISTINCT child.personId) AS child_ids
+        RETURN seed_ids + partner_ids + child_ids AS person_ids
+        """
+        record = self.session.run(
+            query,
+            person_ids=person_ids,
+            family_unit_ids=family_unit_ids,
+        ).single()
+        return _unique_ids(record["person_ids"] if record else person_ids)
 
     def _get_edges_for_scope(
         self,

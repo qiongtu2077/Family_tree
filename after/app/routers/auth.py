@@ -12,6 +12,7 @@ import uuid
 import os
 
 from ..database import get_db
+from ..local_accounts import get_demo_accounts, get_initial_admin_account
 from ..models import User, RegistrationRequest
 from ..services.email_service import send_registration_approval_email, send_registration_result_email
 
@@ -301,17 +302,18 @@ def get_pending_requests(db: Session = Depends(get_db)):
 @router.post("/init-admin")
 def init_admin(db: Session = Depends(get_db)):
     """
-    初始化管理员账号（仅在没有管理员时可用）
-    默认账号: admin / <ROTATED_ADMIN_PASSWORD>
+    初始化管理员账号（仅在没有管理员时可用）。
     """
     existing_admin = db.query(User).filter(User.is_admin == True).first()
     if existing_admin:
         raise HTTPException(status_code=400, detail="管理员账号已存在")
-    
+
+    account = get_initial_admin_account()
     admin = User(
-        username="admin",
-        password=hash_password("<ROTATED_ADMIN_PASSWORD>"),
-        email="<ADMIN_EMAIL>",
+        username=account["username"],
+        password=hash_password(account["password"]),
+        email=account["email"],
+        real_name=account["real_name"],
         is_admin=True,
         is_active=True
     )
@@ -321,30 +323,14 @@ def init_admin(db: Session = Depends(get_db)):
     return {
         "success": True,
         "message": "管理员账号已创建",
-        "username": "admin",
-        "password": "<ROTATED_ADMIN_PASSWORD>"
+        "username": account["username"],
     }
 
 
 @router.post("/init-demo-users")
 def init_demo_users(db: Session = Depends(get_db)):
     """初始化管理员与测试用户账号，重复执行会更新密码和启用状态。"""
-    accounts = [
-        {
-            "username": "admin",
-            "password": "<ROTATED_ADMIN_PASSWORD>",
-            "email": "admin@familytree.local",
-            "real_name": "系统管理员",
-            "is_admin": True,
-        },
-        {
-            "username": "test",
-            "password": "<ROTATED_TEST_PASSWORD>",
-            "email": "test@familytree.local",
-            "real_name": "测试用户",
-            "is_admin": False,
-        },
-    ]
+    accounts = get_demo_accounts()
 
     created = []
     updated = []
@@ -372,8 +358,11 @@ def init_demo_users(db: Session = Depends(get_db)):
         "created": created,
         "updated": updated,
         "accounts": [
-            {"username": "admin", "password": "<ROTATED_ADMIN_PASSWORD>", "role": "管理员"},
-            {"username": "test", "password": "<ROTATED_TEST_PASSWORD>", "role": "测试用户"},
+            {
+                "username": account["username"],
+                "role": "管理员" if account["is_admin"] else "测试用户",
+            }
+            for account in accounts
         ],
     }
 

@@ -18,16 +18,14 @@ scp -r Family_tree user@your-server:/home/user/
 
 ### 2. 配置邮件服务
 
-编辑 `after/app/services/email_service.py`，配置邮件发送：
+通过环境变量或后端 `.env` 配置邮件发送，敏感信息不要写入代码或提交到仓库：
 
-```python
-EMAIL_CONFIG = {
-    "smtp_server": "smtp.163.com",
-    "smtp_port": 465,
-    "sender_email": "your-email@163.com",  # 你的163邮箱
-    "sender_password": "<MAIL_APP_PASSWORD>",    # 163邮箱授权码（不是登录密码）
-    "admin_email": "<ADMIN_EMAIL>"     # 管理员邮箱
-}
+```bash
+SMTP_SERVER=smtp.example.com
+SMTP_PORT=465
+SMTP_SENDER_EMAIL=<sender-email>
+SMTP_SENDER_PASSWORD=<mail-app-password>
+SMTP_ADMIN_EMAIL=<admin-email>
 ```
 
 ### 3. 配置服务器地址
@@ -51,9 +49,7 @@ docker-compose up -d --build
 curl -X POST http://localhost:8000/api/auth/init-admin
 ```
 
-这会创建默认管理员账号：
-- 用户名：admin
-- 密码：<ROTATED_ADMIN_PASSWORD>
+管理员账号和密码必须通过部署环境变量或后端 `.env` 提供，不要写在仓库文档中。
 
 ## 三、手动部署（不使用Docker）
 

@@ -1,13 +1,15 @@
 """测试数据库连接"""
+import os
+
 import pymysql
 
 try:
     conn = pymysql.connect(
-        host='localhost',
-        user='root',
+        host=os.getenv("MYSQL_HOST", "localhost"),
+        user=os.getenv("MYSQL_USER", "root"),
         password=os.getenv("MYSQL_PASSWORD", ""),
-        database='familytree',
-        charset='utf8mb4'
+        database=os.getenv("MYSQL_DATABASE", "familytree"),
+        charset="utf8mb4",
     )
     print("✅ 数据库连接成功！")
     

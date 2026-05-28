@@ -30,7 +30,6 @@
     </nav>
 
     <div class="toolbar-actions">
-      <button @click="$emit('openRelation')">关系路径</button>
       <button v-if="isAdmin" @click="$emit('openAdmin')">管理诊断</button>
       <button class="ghost-btn" @click="$emit('logout')">退出</button>
     </div>
@@ -60,6 +59,7 @@ const views = [
   { value: 'mainline', label: '本家主线' },
   { value: 'inlaw', label: '姻亲谱系' },
   { value: 'bridge', label: '联姻桥接' },
+  { value: 'path', label: '关系路径' },
   { value: 'branch', label: '后代分支' },
   { value: 'overview', label: '家族全景' }
 ]

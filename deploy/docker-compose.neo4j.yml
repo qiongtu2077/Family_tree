@@ -6,7 +6,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      - NEO4J_AUTH=neo4j/<ROTATED_NEO4J_PASSWORD>
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in your shell or .env}
     volumes:
       - family_tree_neo4j_data:/data
       - family_tree_neo4j_logs:/logs

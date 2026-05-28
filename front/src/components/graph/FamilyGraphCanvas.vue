@@ -24,7 +24,8 @@ const emit = defineEmits(['selectPerson'])
 const containerRef = ref(null)
 let graphInstance = null
 let g6Promise = null
-let behaviorRegistered = false
+let hoveredNodeId = null
+let dragSample = null
 
 /**
  * 初始化 G6 实例。
@@ -32,7 +33,6 @@ let behaviorRegistered = false
 async function ensureGraph() {
   if (graphInstance || !containerRef.value) return graphInstance
   const G6 = await loadG6()
-  registerElasticDragBehavior(G6)
   graphInstance = new G6.Graph({
     container: containerRef.value,
     width: containerRef.value.clientWidth,
@@ -40,13 +40,16 @@ async function ensureGraph() {
     fitView: true,
     fitViewPadding: 60,
     modes: {
-      default: ['elastic-drag-canvas', 'zoom-canvas', 'activate-relations']
+      default: [
+        { type: 'drag-canvas', allowDragOnItem: true, scalableRange: 1 },
+        'zoom-canvas'
+      ]
     },
     defaultNode: {
       anchorPoints: [[0.5, 0], [0.5, 1], [0, 0.5], [1, 0.5]]
     },
     defaultEdge: {
-      type: 'polyline'
+      type: 'line'
     },
     animate: true,
     animateCfg: {
@@ -54,11 +57,19 @@ async function ensureGraph() {
       easing: 'easeCubic'
     },
     nodeStateStyles: {
+      hover: {
+        fill: 'rgba(24, 24, 20, 0.94)',
+        stroke: 'rgba(255, 250, 186, 0.9)',
+        lineWidth: 2.2,
+        shadowColor: 'rgba(255, 250, 0, 0.14)',
+        shadowBlur: 10
+      },
       selected: {
+        fill: 'rgba(24, 24, 20, 0.94)',
         stroke: '#fffa00',
-        lineWidth: 4,
-        shadowColor: 'rgba(255, 250, 0, 0.38)',
-        shadowBlur: 20
+        lineWidth: 2.8,
+        shadowColor: 'rgba(255, 250, 0, 0.2)',
+        shadowBlur: 12
       }
     }
   })
@@ -73,6 +84,22 @@ async function ensureGraph() {
 
   graphInstance.on('canvas:click', () => {
     clearSelectedNodes()
+  })
+
+  graphInstance.on('node:mouseenter', event => {
+    setHoveredNode(event.item)
+  })
+
+  graphInstance.on('node:mouseleave', () => {
+    clearHoveredNode()
+  })
+
+  graphInstance.on('canvas:drag', event => {
+    sampleCanvasDrag(event)
+  })
+
+  graphInstance.on('canvas:dragend', () => {
+    animateCanvasDrift()
   })
 
   window.addEventListener('resize', resizeGraph)
@@ -107,97 +134,59 @@ async function loadG6() {
 }
 
 /**
- * 注册带惯性反馈的整体画布拖拽行为。
+ * 采样画布拖拽速度，用于松手后的轻微惯性。
  */
-function registerElasticDragBehavior(G6) {
-  if (behaviorRegistered) return
-  behaviorRegistered = true
+function sampleCanvasDrag(event) {
+  const point = getEventPoint(event)
+  const now = performance.now()
+  if (!dragSample?.point) {
+    dragSample = { point, time: now, velocity: { x: 0, y: 0 } }
+    return
+  }
 
-  G6.registerBehavior('elastic-drag-canvas', {
-    getEvents() {
-      return {
-        mousedown: 'onDragStart',
-        drag: 'onDrag',
-        dragend: 'onDragEnd',
-        mouseup: 'onDragEnd',
-        touchstart: 'onDragStart',
-        touchmove: 'onDrag',
-        touchend: 'onDragEnd'
-      }
-    },
-
-    /**
-     * 记录拖拽起点和速度采样。
-     */
-    onDragStart(event) {
-      if (event.originalEvent?.button && event.originalEvent.button !== 0) return
-      this.dragging = true
-      this.lastPoint = getEventPoint(event)
-      this.velocity = { x: 0, y: 0 }
-      this.lastTime = performance.now()
-    },
-
-    /**
-     * 拖动画布整体位移，节点之间结构保持稳定。
-     */
-    onDrag(event) {
-      if (!this.dragging || !this.lastPoint) return
-      const now = performance.now()
-      const point = getEventPoint(event)
-      const dx = point.x - this.lastPoint.x
-      const dy = point.y - this.lastPoint.y
-      const dt = Math.max(now - this.lastTime, 16)
-
-      this.graph.translate(dx, dy)
-      this.velocity = {
-        x: dx / dt,
-        y: dy / dt
-      }
-      this.lastPoint = point
-      this.lastTime = now
-    },
-
-    /**
-     * 松手时补一小段惯性位移，形成图数据库式弹性手感。
-     */
-    onDragEnd() {
-      if (!this.dragging) return
-      this.dragging = false
-      this.lastPoint = null
-
-      const dx = Math.max(-80, Math.min(80, (this.velocity?.x || 0) * 260))
-      const dy = Math.max(-80, Math.min(80, (this.velocity?.y || 0) * 260))
-      if (Math.abs(dx) + Math.abs(dy) < 6) return
-
-      this.animateElasticDrift(dx, dy)
-    },
-
-    /**
-     * 使用阻尼曲线模拟整体拖拽后的弹性回馈。
-     */
-    animateElasticDrift(dx, dy) {
-      const start = performance.now()
-      const duration = 520
-      let lastX = 0
-      let lastY = 0
-
-      const step = now => {
-        const progress = Math.min((now - start) / duration, 1)
-        const damping = Math.exp(-4.5 * progress)
-        const spring = 1 - damping * Math.cos(progress * Math.PI * 3.2)
-        const nextX = dx * spring
-        const nextY = dy * spring
-
-        this.graph.translate(nextX - lastX, nextY - lastY)
-        lastX = nextX
-        lastY = nextY
-
-        if (progress < 1) requestAnimationFrame(step)
-      }
-
-      requestAnimationFrame(step)
+  const dt = Math.max(now - dragSample.time, 16)
+  dragSample = {
+    point,
+    time: now,
+    velocity: {
+      x: (point.x - dragSample.point.x) / dt,
+      y: (point.y - dragSample.point.y) / dt
     }
-  })
+  }
+}
+
+/**
+ * 拖拽结束后补一小段阻尼位移，保留整体弹性手感。
+ */
+function animateCanvasDrift() {
+  if (!graphInstance || !dragSample?.velocity) return
+
+  const dx = clamp(dragSample.velocity.x * 220, -64, 64)
+  const dy = clamp(dragSample.velocity.y * 220, -64, 64)
+  dragSample = null
+  if (Math.abs(dx) + Math.abs(dy) < 5) return
+
+  const start = performance.now()
+  const duration = 420
+  let lastX = 0
+  let lastY = 0
+
+  const step = now => {
+    if (!graphInstance) return
+    const progress = Math.min((now - start) / duration, 1)
+    const damping = Math.exp(-4.2 * progress)
+    const spring = 1 - damping * Math.cos(progress * Math.PI * 2.8)
+    const nextX = dx * spring
+    const nextY = dy * spring
+
+    graphInstance.translate(nextX - lastX, nextY - lastY)
+    lastX = nextX
+    lastY = nextY
+
+    if (progress < 1) requestAnimationFrame(step)
+  }
+
+  requestAnimationFrame(step)
 }
 
 /**
@@ -209,6 +198,36 @@ function getEventPoint(event) {
     x: touch?.clientX ?? event.clientX ?? event.canvasX ?? 0,
     y: touch?.clientY ?? event.clientY ?? event.canvasY ?? 0
   }
+}
+
+/**
+ * 将数值限制在指定范围内。
+ */
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value))
+}
+
+/**
+ * 设置当前悬停人物的轻量状态。
+ */
+function setHoveredNode(item) {
+  if (!graphInstance || !item) return
+  const model = item.getModel()
+  if (model.nodeType !== 'person') return
+
+  clearHoveredNode()
+  hoveredNodeId = model.id
+  graphInstance.setItemState(item, 'hover', true)
+}
+
+/**
+ * 清除当前悬停状态。
+ */
+function clearHoveredNode() {
+  if (!graphInstance || !hoveredNodeId) return
+  const item = graphInstance.findById(hoveredNodeId)
+  if (item) graphInstance.setItemState(item, 'hover', false)
+  hoveredNodeId = null
 }
 
 /**

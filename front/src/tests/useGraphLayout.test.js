@@ -21,12 +21,15 @@ describe('useGraphLayout', () => {
     const anchorNodes = data.nodes.filter(node => node.nodeType === 'anchor')
 
     expect(visibleNodes.map(node => node.id)).toEqual(['father', 'mother', 'child'])
-    expect(anchorNodes).toHaveLength(1)
-    expect(anchorNodes[0].style.opacity).toBe(0)
+    expect(anchorNodes.length).toBeGreaterThan(1)
+    expect(anchorNodes.every(node => node.style.opacity === 0)).toBe(true)
     expect(data.nodes.find(node => node.id === 'father').label).toBe('父亲')
     expect(data.nodes.find(node => node.id === 'father').label).not.toContain('1970')
+    expect(data.nodes.find(node => node.id === 'father').style.stroke).not.toBe('#ff3b42')
     expect(data.edges.find(edge => edge.relation === 'spouse').type).toBe('line')
-    expect(data.edges.find(edge => edge.relation === 'child').type).toBe('polyline')
+    expect(data.edges.filter(edge => edge.relation === 'child').every(edge => edge.type === 'line')).toBe(true)
+    expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
+    expect(data.edges.some(edge => edge.style.stroke === '#00a6ff')).toBe(false)
   })
 
   it('keeps descendants below parents and maps direct parent edges', async () => {
@@ -46,8 +49,39 @@ describe('useGraphLayout', () => {
 
     expect(data.nodes.filter(node => node.nodeType === 'person')).toHaveLength(2)
     expect(child.y).toBeGreaterThan(parent.y)
-    expect(childEdge.source).toContain('anchor:')
-    expect(childEdge.style.stroke).toBe('#00a6ff')
+    expect(childEdge.segment).toBe('parent-stem')
+    expect(childEdge.type).toBe('line')
+    expect(childEdge.style.stroke).toBe('rgba(224, 211, 157, 0.72)')
     expect(childEdge.style.endArrow).toBe(false)
+  })
+
+  it('aligns a married child under the parent family line', async () => {
+    const data = await layoutGraph({
+      nodes: [
+        { id: 'grandfather', type: 'person', name: '爷爷' },
+        { id: 'grandmother', type: 'person', name: '奶奶' },
+        { id: 'father', type: 'person', name: '父亲' },
+        { id: 'mother', type: 'person', name: '母亲' },
+        { id: 'child', type: 'person', name: '孩子' },
+        { id: 'family:grandparents', type: 'familyUnit' },
+        { id: 'family:parents', type: 'familyUnit' }
+      ],
+      edges: [
+        { id: 'e1', source: 'grandfather', target: 'family:grandparents', relation: 'partner' },
+        { id: 'e2', source: 'grandmother', target: 'family:grandparents', relation: 'partner' },
+        { id: 'e3', source: 'family:grandparents', target: 'father', relation: 'biological' },
+        { id: 'e4', source: 'father', target: 'family:parents', relation: 'partner' },
+        { id: 'e5', source: 'mother', target: 'family:parents', relation: 'partner' },
+        { id: 'e6', source: 'family:parents', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const father = data.nodes.find(node => node.id === 'father')
+    const parentStemEnd = data.nodes.find(node => node.id === 'child:family:grandparents:parent-stem:end')
+    const childEdges = data.edges.filter(edge => edge.relation === 'child')
+
+    expect(parentStemEnd.x).toBe(father.x)
+    expect(childEdges.every(edge => edge.type === 'line')).toBe(true)
+    expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
   })
 })

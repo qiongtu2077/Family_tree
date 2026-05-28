@@ -28,6 +28,16 @@ class PersonRepository:
         for query in constraints:
             self.session.run(query).consume()
 
+    def clear_demo_family(self) -> None:
+        """清理旧演示族谱节点，避免重复初始化累积关系。"""
+        query = """
+        MATCH (node)
+        WHERE (node:Person AND node.personId STARTS WITH 'demo:')
+           OR (node:FamilyUnit AND node.familyUnitId STARTS WITH 'demo:')
+        DETACH DELETE node
+        """
+        self.session.run(query).consume()
+
     # --- 人物 CRUD --- #
 
     def list_persons(self, skip: int, limit: int) -> list[dict[str, Any]]:
