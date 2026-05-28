@@ -1,101 +1,53 @@
-import { describe, expect, it, vi } from 'vitest'
-
-vi.mock('elkjs/lib/elk.bundled.js', () => ({
-  default: class FakeElk {
-    async layout(graph) {
-      return {
-        ...graph,
-        children: graph.children.map((node, index) => ({
-          ...node,
-          x: index * 100,
-          y: index * 80
-        }))
-      }
-    }
-  }
-}))
+import { describe, expect, it } from 'vitest'
+import { layoutGraph } from '../composables/useGraphLayout'
 
 describe('useGraphLayout', () => {
-  it('converts GraphViewDTO to G6 graph data', async () => {
-    const { layoutGraph } = await import('../composables/useGraphLayout')
+  it('projects graph units into visible person-only genealogy nodes', async () => {
     const data = await layoutGraph({
       nodes: [
-        { id: 'p1', type: 'person', name: '父亲', gender: 'M' },
+        { id: 'father', type: 'person', name: '父亲', gender: 'M', birth_date: '1970-01-01' },
+        { id: 'mother', type: 'person', name: '母亲', gender: 'F', birth_date: '1972-01-01' },
+        { id: 'child', type: 'person', name: '孩子', gender: 'U', birth_date: '2000-01-01' },
         { id: 'family:f1', type: 'familyUnit', family_type: 'marriage' }
       ],
       edges: [
-        {
-          id: 'e1',
-          source: 'p1',
-          target: 'family:f1',
-          relation: 'partner',
-          label: '伴侣',
-          style: 'spouse',
-          metadata: {}
-        }
+        { id: 'e1', source: 'father', target: 'family:f1', relation: 'partner', style: 'spouse' },
+        { id: 'e2', source: 'mother', target: 'family:f1', relation: 'partner', style: 'spouse' },
+        { id: 'e3', source: 'family:f1', target: 'child', relation: 'biological', style: 'solid' }
       ]
     })
 
-    expect(data.nodes).toHaveLength(2)
-    expect(data.nodes[0].label).toContain('父亲')
-    expect(data.nodes[0].x).toBe(82)
-    expect(data.nodes[0].y).toBe(37)
-    expect(data.nodes[1].nodeType).toBe('familyUnit')
-    expect(data.nodes[1].x).toBe(113)
-    expect(data.nodes[1].y).toBe(93)
-    expect(data.edges[0].type).toBe('line')
+    const visibleNodes = data.nodes.filter(node => node.nodeType === 'person')
+    const anchorNodes = data.nodes.filter(node => node.nodeType === 'anchor')
+
+    expect(visibleNodes.map(node => node.id)).toEqual(['father', 'mother', 'child'])
+    expect(anchorNodes).toHaveLength(1)
+    expect(anchorNodes[0].style.opacity).toBe(0)
+    expect(data.nodes.find(node => node.id === 'father').label).toBe('父亲')
+    expect(data.nodes.find(node => node.id === 'father').label).not.toContain('1970')
+    expect(data.edges.find(edge => edge.relation === 'spouse').type).toBe('line')
+    expect(data.edges.find(edge => edge.relation === 'child').type).toBe('polyline')
   })
 
-  it('maps edge styles and person metadata branches', async () => {
-    const { layoutGraph } = await import('../composables/useGraphLayout')
+  it('keeps descendants below parents and maps direct parent edges', async () => {
     const data = await layoutGraph({
       nodes: [
-        {
-          id: 'p1',
-          type: 'person',
-          name: '母亲',
-          gender: 'F',
-          birth_date: '1950-01-01',
-          death_date: '2020-01-01'
-        },
-        { id: 'p2', type: 'person', name: '孩子', gender: 'U' },
-        { id: 'family:f1', type: 'familyUnit', family_type: 'adoptive' }
+        { id: 'parent', type: 'person', name: '父辈', gender: 'M' },
+        { id: 'child', type: 'person', name: '子女', gender: 'F' }
       ],
       edges: [
-        {
-          id: 'e-highlight',
-          source: 'p1',
-          target: 'p2',
-          relation: 'mother',
-          label: '母亲',
-          style: 'highlight',
-          metadata: {}
-        },
-        {
-          id: 'e-dashed',
-          source: 'family:f1',
-          target: 'p2',
-          relation: 'adoptive',
-          label: '养子女',
-          style: 'dashed',
-          metadata: {}
-        },
-        {
-          id: 'e-solid',
-          source: 'p1',
-          target: 'family:f1',
-          relation: 'partner',
-          label: '',
-          style: 'solid',
-          metadata: {}
-        }
+        { id: 'e-parent', source: 'parent', target: 'child', relation: 'father', style: 'solid' }
       ]
     })
 
-    expect(data.nodes[0].label).toContain('1950-2020')
-    expect(data.nodes[0].style.stroke).toBe('#d4af37')
-    expect(data.edges.find(edge => edge.id === 'e-highlight').style.lineWidth).toBe(4)
-    expect(data.edges.find(edge => edge.id === 'e-dashed').style.lineDash).toEqual([6, 5])
-    expect(data.edges.find(edge => edge.id === 'e-solid').style.endArrow).toBe(true)
+    const parent = data.nodes.find(node => node.id === 'parent')
+    const child = data.nodes.find(node => node.id === 'child')
+    const childEdge = data.edges.find(edge => edge.relation === 'child')
+
+    expect(data.nodes.filter(node => node.nodeType === 'person')).toHaveLength(2)
+    expect(child.y).toBeGreaterThan(parent.y)
+    expect(childEdge.source).toContain('anchor:')
+    expect(childEdge.style.stroke).toBe('#00a6ff')
+    expect(childEdge.style.endArrow).toBe(false)
   })
 })

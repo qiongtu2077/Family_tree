@@ -8,8 +8,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          g6: ['@antv/g6'],
-          elk: ['elkjs/lib/elk.bundled.js']
+          g6: ['@antv/g6']
         }
       }
     },
