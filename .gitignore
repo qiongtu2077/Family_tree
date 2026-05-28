@@ -30,7 +30,6 @@ yarn-error.log*
 .env.local
 .env.*.local
 账密.txt
-credentials*.txt
 secrets*.txt
 
 # 上传的文件（可选择是否提交）
