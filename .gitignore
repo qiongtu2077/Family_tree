@@ -47,6 +47,7 @@ Thumbs.db
 
 # 构建输出
 front/dist/
+front/coverage/
 
 # 临时文件
 *.tmp

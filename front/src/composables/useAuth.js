@@ -14,7 +14,7 @@
  */
 
 import { ref, computed } from 'vue'
-import { login, register } from '../api/genealogy'
+import { getCurrentUser, login, register } from '../api/auth'
 
 // ========== 响应式状态（全局单例） ==========
 
@@ -26,6 +26,15 @@ const isRegisterMode = ref(false)
 
 /** 当前登录用户信息 */
 const currentUser = ref(null)
+
+/** 是否正在检测登录状态 */
+const isCheckingAuth = ref(false)
+
+/** 是否正在提交登录/注册 */
+const isSubmittingAuth = ref(false)
+
+/** 认证错误提示 */
+const authError = ref('')
 
 /** 是否为管理员（计算属性） */
 const isAdmin = computed(() => currentUser.value?.is_admin === true)
@@ -54,26 +63,30 @@ export function useAuth() {
    */
   const handleLogin = async () => {
     const { username, password } = loginForm.value
+    authError.value = ''
     
     // 表单验证
     if (!username || !password) {
-      alert('请输入账号和密码')
+      authError.value = '请输入账号和密码'
       return
     }
     
     try {
-      const response = await login({ username, password })
-      if (response.data.success) {
+      isSubmittingAuth.value = true
+      const response = await login(username, password)
+      if (response.success) {
         // 登录成功：保存用户信息
-        currentUser.value = response.data.user
+        currentUser.value = response.user
         isLoggedIn.value = true
-        localStorage.setItem('user', JSON.stringify(response.data.user))
+        localStorage.setItem('user', JSON.stringify(response.user))
       } else {
-        alert(response.data.message || '登录失败')
+        authError.value = response.message || '登录失败'
       }
     } catch (error) {
       console.error('登录错误:', error)
-      alert('登录失败: ' + (error.response?.data?.detail || error.message))
+      authError.value = '登录失败: ' + (error.response?.data?.detail || error.message)
+    } finally {
+      isSubmittingAuth.value = false
     }
   }
 
@@ -83,21 +96,23 @@ export function useAuth() {
    */
   const handleRegister = async () => {
     const { username, email, password, confirmPassword, real_name } = registerForm.value
+    authError.value = ''
     
     // 表单验证
     if (!username || !email || !password || !real_name) {
-      alert('请填写所有必填项')
+      authError.value = '请填写所有必填项'
       return
     }
     
     if (password !== confirmPassword) {
-      alert('两次输入的密码不一致')
+      authError.value = '两次输入的密码不一致'
       return
     }
     
     try {
-      const response = await register({ username, email, password, real_name })
-      if (response.data.success) {
+      isSubmittingAuth.value = true
+      const response = await register(username, password, email, real_name)
+      if (response.success) {
         alert('注册申请已提交，请等待管理员审批')
         // 注册成功后切换回登录模式
         isRegisterMode.value = false
@@ -110,11 +125,13 @@ export function useAuth() {
           real_name: '' 
         }
       } else {
-        alert(response.data.message || '注册失败')
+        authError.value = response.message || '注册失败'
       }
     } catch (error) {
       console.error('注册错误:', error)
-      alert('注册失败: ' + (error.response?.data?.detail || error.message))
+      authError.value = '注册失败: ' + (error.response?.data?.detail || error.message)
+    } finally {
+      isSubmittingAuth.value = false
     }
   }
 
@@ -125,6 +142,7 @@ export function useAuth() {
   const handleLogout = () => {
     isLoggedIn.value = false
     currentUser.value = null
+    authError.value = ''
     localStorage.removeItem('user')
     loginForm.value = { username: '', password: '' }
   }
@@ -133,16 +151,22 @@ export function useAuth() {
    * 检查登录状态
    * 从 localStorage 恢复用户信息（页面刷新后保持登录）
    */
-  const checkLoginStatus = () => {
+  const checkLoginStatus = async () => {
     const savedUser = localStorage.getItem('user')
-    if (savedUser) {
-      try {
-        currentUser.value = JSON.parse(savedUser)
-        isLoggedIn.value = true
-      } catch (e) {
-        // JSON 解析失败，清除无效数据
-        localStorage.removeItem('user')
-      }
+    if (!savedUser) return
+
+    try {
+      isCheckingAuth.value = true
+      const parsedUser = JSON.parse(savedUser)
+      const response = await getCurrentUser(parsedUser.id)
+      currentUser.value = response.user
+      isLoggedIn.value = true
+      localStorage.setItem('user', JSON.stringify(response.user))
+    } catch (e) {
+      // 本地登录态失效时主动清除，避免前端误判已登录。
+      handleLogout()
+    } finally {
+      isCheckingAuth.value = false
     }
   }
 
@@ -152,6 +176,9 @@ export function useAuth() {
     isLoggedIn,
     isRegisterMode,
     currentUser,
+    isCheckingAuth,
+    isSubmittingAuth,
+    authError,
     isAdmin,
     loginForm,
     registerForm,

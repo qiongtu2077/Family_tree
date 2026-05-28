@@ -14,16 +14,22 @@ load_dotenv()
 # 数据库连接配置
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "mysql+pymysql://root:password@localhost:3306/family_tree?charset=utf8mb4"
+    "sqlite:///./family_tree.db"
 )
 
 # 创建数据库引擎
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,  # 连接前检查连接是否有效
-    pool_recycle=3600,   # 连接回收时间（秒）
-    echo=False           # 是否打印 SQL 语句（开发时可设为 True）
-)
+engine_options = {
+    "echo": False,
+}
+if DATABASE_URL.startswith("sqlite"):
+    engine_options["connect_args"] = {"check_same_thread": False}
+else:
+    engine_options.update({
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+    })
+
+engine = create_engine(DATABASE_URL, **engine_options)
 
 # 创建会话工厂
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

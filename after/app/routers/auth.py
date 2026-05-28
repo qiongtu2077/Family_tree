@@ -1,10 +1,11 @@
 """
 用户认证 API 路由
+负责登录、注册审批、会话检测和演示账号初始化。
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional
 import hashlib
 import uuid
@@ -34,6 +35,8 @@ class RegisterRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
+    """登录用户响应模型。"""
+
     id: int
     username: str
     email: str
@@ -55,6 +58,18 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return hash_password(plain_password) == hashed_password
 
 
+def serialize_user(user: User) -> dict:
+    """把 User ORM 对象转换为前端安全响应。"""
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "real_name": user.real_name,
+        "is_admin": user.is_admin,
+        "person_id": user.person_id,
+    }
+
+
 @router.post("/login")
 def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
@@ -73,15 +88,19 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     
     return {
         "success": True,
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "real_name": user.real_name,
-            "is_admin": user.is_admin,
-            "person_id": user.person_id
-        }
+        "user": serialize_user(user)
     }
+
+
+@router.get("/me")
+def get_current_user(user_id: int = Query(..., description="当前用户 ID"), db: Session = Depends(get_db)):
+    """检测当前本地会话用户是否仍有效。"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+    if not user.is_active:
+        raise HTTPException(status_code=401, detail="账号已被禁用")
+    return {"success": True, "user": serialize_user(user)}
 
 
 @router.post("/register")
@@ -304,5 +323,57 @@ def init_admin(db: Session = Depends(get_db)):
         "message": "管理员账号已创建",
         "username": "admin",
         "password": "<ROTATED_ADMIN_PASSWORD>"
+    }
+
+
+@router.post("/init-demo-users")
+def init_demo_users(db: Session = Depends(get_db)):
+    """初始化管理员与测试用户账号，重复执行会更新密码和启用状态。"""
+    accounts = [
+        {
+            "username": "admin",
+            "password": "<ROTATED_ADMIN_PASSWORD>",
+            "email": "admin@familytree.local",
+            "real_name": "系统管理员",
+            "is_admin": True,
+        },
+        {
+            "username": "test",
+            "password": "<ROTATED_TEST_PASSWORD>",
+            "email": "test@familytree.local",
+            "real_name": "测试用户",
+            "is_admin": False,
+        },
+    ]
+
+    created = []
+    updated = []
+    for account in accounts:
+        user = db.query(User).filter(User.username == account["username"]).first()
+        payload = {
+            "password": hash_password(account["password"]),
+            "email": account["email"],
+            "real_name": account["real_name"],
+            "is_admin": account["is_admin"],
+            "is_active": True,
+        }
+        if user:
+            for field, value in payload.items():
+                setattr(user, field, value)
+            updated.append(account["username"])
+        else:
+            db.add(User(username=account["username"], **payload))
+            created.append(account["username"])
+
+    db.commit()
+    return {
+        "success": True,
+        "message": "演示账号已初始化",
+        "created": created,
+        "updated": updated,
+        "accounts": [
+            {"username": "admin", "password": "<ROTATED_ADMIN_PASSWORD>", "role": "管理员"},
+            {"username": "test", "password": "<ROTATED_TEST_PASSWORD>", "role": "测试用户"},
+        ],
     }
 

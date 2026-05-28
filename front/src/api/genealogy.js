@@ -1,12 +1,7 @@
 /**
  * 族谱相关 API 接口
  */
-import axios from 'axios'
-
-const api = axios.create({
-  baseURL: '/api',
-  timeout: 30000  // 增加到 30 秒
-})
+import { apiClient as api } from './http'
 
 /**
  * 搜索人员
@@ -141,4 +136,3 @@ export const uploadPhoto = async (personId, file, userId) => {
   })
   return response.data
 }
-
