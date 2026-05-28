@@ -70,6 +70,7 @@ const DEMO_FAMILIES = [
 ]
 
 const FALLBACK_WARNING = 'Neo4j 暂不可用，当前显示本地演示族谱数据。'
+const FALLBACK_BRANCH_WARNING = 'Neo4j 暂不可用，当前显示本地演示后代分支。'
 
 /**
  * 返回本地演示人物列表。
@@ -79,16 +80,40 @@ export function getFallbackPeople() {
 }
 
 /**
+ * 返回本地演示中心人物上下文。
+ */
+export function getFallbackCenterContext(personId = 'demo:child') {
+  const safePersonId = normalizeCenterPersonId(personId)
+  const person = DEMO_PEOPLE.find(item => item.id === safePersonId)
+  if (!person) return null
+
+  return {
+    person,
+    available_spouses: buildFallbackSpouseOptions(safePersonId),
+    available_family_units: buildFallbackFamilyOptions(safePersonId),
+    default_mainline_depth: 3,
+    nine_kinship_summary: buildFallbackKinshipSummary(safePersonId),
+    warnings: ['当前使用本地演示中心人物上下文']
+  }
+}
+
+/**
  * 返回本地演示图谱。
  */
-export function getFallbackGraph(viewMode = 'mainline', centerPersonId = 'demo:child') {
+export function getFallbackGraph(viewMode = 'mainline', centerPersonId = 'demo:child', options = {}) {
   const safeCenterPersonId = normalizeCenterPersonId(centerPersonId)
   if (viewMode === 'overview') {
     return graphResponse('overview', null, DEMO_PEOPLE, DEMO_FAMILIES)
   }
 
   if (viewMode === 'branch') {
-    return graphResponse('branch', safeCenterPersonId, DEMO_PEOPLE, DEMO_FAMILIES)
+    const branch = collectBranchProjection(
+      options.rootType,
+      options.rootId,
+      safeCenterPersonId,
+      options.depth
+    )
+    return graphResponse('branch', safeCenterPersonId, branch.people, branch.families, branch.warnings)
   }
 
   if (viewMode === 'bridge') {
@@ -141,17 +166,17 @@ function family(id, partners, children, displayOrder) {
 /**
  * 组装 GraphViewResponse 结构。
  */
-function graphResponse(viewMode, centerPersonId, people, families) {
+function graphResponse(viewMode, centerPersonId, people, families, warnings = [FALLBACK_WARNING]) {
   return {
     view_mode: viewMode,
     center_person_id: centerPersonId,
     nodes: [
-      ...people.sort(comparePeople),
+      ...[...people].sort(comparePeople),
       ...families.map(({ partners, children, ...node }) => node)
     ],
     edges: buildEdges(families),
     hidden_relation_count: 0,
-    warnings: [FALLBACK_WARNING]
+    warnings
   }
 }
 
@@ -188,6 +213,183 @@ function buildEdges(families) {
 }
 
 /**
+ * 只沿 FamilyUnit -> children -> children 的家庭单元收集后代分支。
+ */
+function collectBranchProjection(rootType, rootId, centerPersonId, depth = 5) {
+  const rootFamily = resolveBranchRootFamily(rootType, rootId, centerPersonId)
+  if (!rootFamily) {
+    const person = DEMO_PEOPLE.find(item => item.id === centerPersonId)
+    return {
+      people: person ? [person] : [],
+      families: [],
+      warnings: [FALLBACK_BRANCH_WARNING, '本地演示数据中该人物暂无可展开后代分支。']
+    }
+  }
+
+  const maxDepth = normalizeDepth(depth)
+  const projectedFamilies = new Map()
+  const personIds = new Set()
+  let frontier = [{ family: rootFamily, generation: 0 }]
+
+  addProjectedFamily(projectedFamilies, rootFamily, rootFamily.partners, [])
+  rootFamily.partners.forEach(id => personIds.add(id))
+
+  while (frontier.length) {
+    const nextFrontier = []
+    frontier.forEach(({ family: currentFamily, generation }) => {
+      const nextGeneration = generation + 1
+      if (nextGeneration > maxDepth) return
+
+      const projectedFamily = projectedFamilies.get(currentFamily.id)
+      currentFamily.children.forEach(childId => {
+        projectedFamily.children.push(childId)
+        personIds.add(childId)
+
+        // 只从“后代本人作为伴侣”的家庭继续向下，不拉入配偶原生父母。
+        findChildFamilies(childId).forEach(childFamily => {
+          childFamily.partners.forEach(partnerId => personIds.add(partnerId))
+          if (nextGeneration < maxDepth) {
+            addProjectedFamily(projectedFamilies, childFamily, childFamily.partners, [])
+            nextFrontier.push({ family: childFamily, generation: nextGeneration })
+          } else {
+            addProjectedFamily(projectedFamilies, childFamily, childFamily.partners, [])
+          }
+        })
+      })
+    })
+    frontier = nextFrontier
+  }
+
+  const people = DEMO_PEOPLE.filter(item => personIds.has(item.id))
+  const families = [...projectedFamilies.values()].filter(item => (
+    item.partners.some(id => personIds.has(id)) || item.children.some(id => personIds.has(id))
+  ))
+  return {
+    people,
+    families,
+    warnings: [FALLBACK_BRANCH_WARNING]
+  }
+}
+
+/**
+ * 根据人物或家庭单元入口解析后代分支根家庭。
+ */
+function resolveBranchRootFamily(rootType, rootId, centerPersonId) {
+  if (rootType === 'familyUnit') {
+    const familyId = normalizeFamilyUnitId(rootId)
+    return DEMO_FAMILIES.find(item => normalizeFamilyUnitId(item.id) === familyId) || null
+  }
+
+  const personId = normalizeCenterPersonId(rootId || centerPersonId)
+  return findChildFamilies(personId)[0] || null
+}
+
+/**
+ * 查找人物作为伴侣且拥有子女的家庭单元。
+ */
+function findChildFamilies(personId) {
+  return DEMO_FAMILIES
+    .filter(item => item.partners.includes(personId) && item.children.length)
+    .sort(compareFamilies)
+}
+
+/**
+ * 添加投影家庭，允许按深度裁剪子女列表。
+ */
+function addProjectedFamily(projectedFamilies, familyNode, partners, children) {
+  if (projectedFamilies.has(familyNode.id)) return projectedFamilies.get(familyNode.id)
+  const projectedFamily = {
+    ...familyNode,
+    partners: [...partners],
+    children: [...children]
+  }
+  projectedFamilies.set(familyNode.id, projectedFamily)
+  return projectedFamily
+}
+
+/**
+ * 构造本地演示配偶候选。
+ */
+function buildFallbackSpouseOptions(personId) {
+  return DEMO_FAMILIES
+    .filter(item => item.partners.includes(personId))
+    .flatMap(item => item.partners
+      .filter(partnerId => partnerId !== personId)
+      .map(partnerId => ({
+        person: DEMO_PEOPLE.find(personNode => personNode.id === partnerId),
+        family_unit_id: stripGraphFamilyPrefix(item.id),
+        child_count: item.children.length
+      }))
+    )
+    .filter(item => item.person)
+}
+
+/**
+ * 构造本地演示后代根家庭候选。
+ */
+function buildFallbackFamilyOptions(personId) {
+  return DEMO_FAMILIES
+    .filter(item => item.partners.includes(personId))
+    .sort(compareFamilies)
+    .map(item => ({
+      family_unit_id: stripGraphFamilyPrefix(item.id),
+      family_type: item.family_type,
+      label: item.label,
+      spouse_ids: [...item.partners],
+      spouse_names: item.partners
+        .map(partnerId => DEMO_PEOPLE.find(personNode => personNode.id === partnerId)?.name)
+        .filter(Boolean),
+      child_count: item.children.length
+    }))
+}
+
+/**
+ * 构造本地演示九族摘要。
+ */
+function buildFallbackKinshipSummary(personId) {
+  const ancestors = collectAncestors(personId)
+  const descendants = collectDescendants(personId)
+  return {
+    ancestor_depth: 4,
+    descendant_depth: 4,
+    ancestor_count: ancestors.size,
+    descendant_count: descendants.size,
+    visible_person_count: new Set([personId, ...ancestors, ...descendants]).size,
+    hidden_relation_count: 0
+  }
+}
+
+/**
+ * 收集本地演示祖先 ID。
+ */
+function collectAncestors(personId, visited = new Set()) {
+  DEMO_FAMILIES
+    .filter(item => item.children.includes(personId))
+    .forEach(item => {
+      item.partners.forEach(parentId => {
+        if (visited.has(parentId)) return
+        visited.add(parentId)
+        collectAncestors(parentId, visited)
+      })
+    })
+  return visited
+}
+
+/**
+ * 收集本地演示后代 ID。
+ */
+function collectDescendants(personId, visited = new Set()) {
+  findChildFamilies(personId).forEach(item => {
+    item.children.forEach(childId => {
+      if (visited.has(childId)) return
+      visited.add(childId)
+      collectDescendants(childId, visited)
+    })
+  })
+  return visited
+}
+
+/**
  * 收集中心人物附近的演示人物。
  */
 function collectFocusPeople(centerPersonId) {
@@ -212,6 +414,37 @@ function collectFocusPeople(centerPersonId) {
 function comparePeople(left, right) {
   return String(left.birth_date || '').localeCompare(String(right.birth_date || '')) ||
     String(left.id).localeCompare(String(right.id))
+}
+
+/**
+ * 按家庭显示顺序稳定排序。
+ */
+function compareFamilies(left, right) {
+  return Number(left.display_order || 0) - Number(right.display_order || 0) ||
+    String(left.id).localeCompare(String(right.id))
+}
+
+/**
+ * 兼容前端 family: 前缀和后端原始家庭单元 ID。
+ */
+function normalizeFamilyUnitId(familyUnitId) {
+  return stripGraphFamilyPrefix(String(familyUnitId || ''))
+}
+
+/**
+ * 去掉图谱节点层 family: 前缀。
+ */
+function stripGraphFamilyPrefix(familyUnitId) {
+  return String(familyUnitId || '').replace(/^family:/, '')
+}
+
+/**
+ * 规范化后代分支深度。
+ */
+function normalizeDepth(depth) {
+  const parsedDepth = Number.parseInt(depth, 10)
+  if (Number.isNaN(parsedDepth)) return 5
+  return Math.min(Math.max(parsedDepth, 1), 10)
 }
 
 /**

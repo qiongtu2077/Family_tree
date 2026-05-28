@@ -159,6 +159,28 @@ describe('useGraphData', () => {
     expect(data.people.value.length).toBeGreaterThan(40)
   })
 
+  it('uses selected root family when branch API falls back', async () => {
+    getBranchGraph.mockRejectedValue(new Error('timeout of 5000ms exceeded'))
+    const data = useGraphData()
+    data.centerPersonId.value = 'demo:paternal-great-grandfather'
+
+    const graph = await data.loadBranchGraph(
+      'familyUnit',
+      'demo:unit-paternal-great-grandparents',
+      5
+    )
+    const personIds = graph.nodes
+      .filter(node => node.type === 'person')
+      .map(node => node.id)
+
+    expect(data.errorMessage.value).toBe('timeout of 5000ms exceeded')
+    expect(getBranchGraph).toHaveBeenCalledWith('demo:unit-paternal-great-grandparents', 5)
+    expect(personIds).toContain('demo:paternal-great-grandfather')
+    expect(personIds).toContain('demo:child')
+    expect(personIds).not.toContain('demo:maternal-li-great-grandfather')
+    expect(personIds.length).toBeLessThan(data.people.value.length)
+  })
+
   it('falls back to local demo people when Neo4j is unavailable', async () => {
     getPersons.mockRejectedValue({
       response: { data: { detail: 'Neo4j 服务不可用' } }

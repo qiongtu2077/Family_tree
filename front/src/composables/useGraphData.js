@@ -16,7 +16,11 @@ import {
   getOverviewGraph,
   getRelationPath
 } from '../api/graph'
-import { getFallbackGraph, getFallbackPeople } from '../api/demoGraphFallback'
+import {
+  getFallbackCenterContext,
+  getFallbackGraph,
+  getFallbackPeople
+} from '../api/demoGraphFallback'
 import { getPersons, searchPersons } from '../api/persons'
 
 /**
@@ -89,21 +93,26 @@ export function useGraphData() {
   /**
    * 统一执行图谱加载并维护 loading/error 状态。
    */
-  async function loadGraph(loader, fallbackCenterPersonId = null, fallbackViewMode = 'mainline') {
+  async function loadGraph(
+    loader,
+    fallbackCenterPersonId = null,
+    fallbackViewMode = 'mainline',
+    fallbackOptions = {}
+  ) {
     isLoading.value = true
     errorMessage.value = ''
     try {
       const data = await loader()
       if (!isRenderableGraph(data)) {
         errorMessage.value = '接口返回空图谱，已显示本地演示数据'
-        return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child')
+        return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child', fallbackOptions)
       }
       graph.value = data
       centerPersonId.value = data.center_person_id || fallbackCenterPersonId
       return data
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
-      return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child')
+      return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child', fallbackOptions)
     } finally {
       isLoading.value = false
     }
@@ -112,12 +121,13 @@ export function useGraphData() {
   /**
    * 立即切换到本地演示图谱，避免真实库不可用时画布空白。
    */
-  function useFallbackGraph(viewMode = 'mainline', fallbackPersonId = 'demo:child') {
-    const fallbackGraph = getFallbackGraph(viewMode, fallbackPersonId)
+  function useFallbackGraph(viewMode = 'mainline', fallbackPersonId = 'demo:child', options = {}) {
+    const fallbackGraph = getFallbackGraph(viewMode, fallbackPersonId, options)
     graph.value = fallbackGraph
     centerPersonId.value = fallbackGraph.center_person_id || fallbackPersonId
     if (!people.value.length) people.value = getFallbackPeople()
-    centerContext.value = buildFallbackCenterContext(centerPersonId.value, people.value)
+    centerContext.value = getFallbackCenterContext(centerPersonId.value) ||
+      buildFallbackCenterContext(centerPersonId.value, people.value)
     return fallbackGraph
   }
 
@@ -164,7 +174,12 @@ export function useGraphData() {
     const loader = rootType === 'familyUnit'
       ? () => getBranchGraph(stripFamilyPrefix(rootId), depth)
       : () => getBranchGraphByRoot(rootType, rootId, depth)
-    return loadGraph(loader, rootType === 'person' ? rootId : centerPersonId.value, 'branch')
+    return loadGraph(
+      loader,
+      rootType === 'person' ? rootId : centerPersonId.value,
+      'branch',
+      { rootType, rootId, depth }
+    )
   }
 
   /**
