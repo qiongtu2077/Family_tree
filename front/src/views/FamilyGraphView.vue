@@ -45,7 +45,7 @@
 
       <FamilyGraphCanvas
         class="canvas-area"
-        :graph="data.graph.value"
+        :graph="visibleGraph"
         :is-loading="data.isLoading.value"
         :center-person-id="data.centerPersonId.value"
         @select-person="interactions.selectPerson"
@@ -152,6 +152,11 @@ const viewHints = {
 const currentViewLabel = computed(() => viewLabels[interactions.selectedView.value] || '本家主线图')
 const currentViewHint = computed(() => viewHints[interactions.selectedView.value] || viewHints.mainline)
 const centerPersonName = computed(() => data.centerContext.value?.person?.name || '')
+const requiresCenterPerson = computed(() => interactions.selectedView.value !== 'overview')
+const visibleGraph = computed(() => {
+  if (requiresCenterPerson.value && !data.centerPersonId.value) return emptyGraph()
+  return data.graph.value
+})
 const centerOptions = computed(() => centerCandidates.value.length ? centerCandidates.value : data.people.value)
 const parameterOptions = computed(() => {
   if (parameterMode.value === 'family') return data.centerContext.value?.available_family_units || []
@@ -220,6 +225,7 @@ async function confirmCenterPerson() {
 function cancelCenterSelection() {
   centerModalOpen.value = false
   if (!data.centerPersonId.value) {
+    data.graph.value = emptyGraph()
     data.errorMessage.value = '请选择中心人物后再加载族谱图'
   }
 }
@@ -256,6 +262,10 @@ async function showCenterScope() {
  * 进入页面时加载默认图谱。
  */
 onMounted(async () => {
+  if (!data.centerPersonId.value) {
+    openCenterModal()
+  }
+
   let people = []
   try {
     people = await data.loadPeople()
@@ -425,6 +435,19 @@ function normalizePersonId(personId) {
   if (!personId) return ''
   const value = String(personId)
   return /^\d+$/.test(value) ? `legacy:${value}` : value
+}
+
+/**
+ * 返回空图谱，避免中心人物缺失时继续显示旧 G6 数据。
+ */
+function emptyGraph() {
+  return {
+    view_mode: interactions.selectedView.value,
+    center_person_id: null,
+    nodes: [],
+    edges: [],
+    warnings: []
+  }
 }
 </script>
 

@@ -114,6 +114,11 @@ async function renderGraph() {
   const instance = await ensureGraph()
   if (!instance || props.isLoading) return
 
+  if (!props.graph.nodes.length) {
+    instance.changeData({ nodes: [], edges: [] })
+    return
+  }
+
   const data = await layoutGraph(props.graph)
   instance.changeData(data)
   instance.fitView(60)
