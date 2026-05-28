@@ -7,6 +7,8 @@ import {
   getBranchGraph,
   getBranchGraphByRoot,
   getBridgeGraph,
+  getCenterCandidates,
+  getCenterContext,
   getFocusGraph,
   getGraphIssues,
   getInlawGraph,
@@ -26,6 +28,7 @@ export function useGraphData() {
   const issues = ref([])
   const relationPath = ref(null)
   const centerPersonId = ref(null)
+  const centerContext = ref(null)
   const isLoading = ref(false)
   const errorMessage = ref('')
 
@@ -52,6 +55,35 @@ export function useGraphData() {
   async function searchPeople(keyword) {
     if (!keyword?.trim()) return []
     return searchPersons(keyword.trim())
+  }
+
+  /**
+   * 搜索中心人物候选。
+   */
+  async function searchCenterCandidates(keyword) {
+    if (!keyword?.trim()) return []
+    try {
+      return await getCenterCandidates(keyword.trim(), 20)
+    } catch {
+      return searchPeople(keyword)
+    }
+  }
+
+  /**
+   * 加载中心人物上下文。
+   */
+  async function loadCenterContext(personId) {
+    if (!personId) return null
+    try {
+      centerContext.value = await getCenterContext(personId)
+      centerPersonId.value = centerContext.value.person.id
+      return centerContext.value
+    } catch (error) {
+      errorMessage.value = extractErrorMessage(error)
+      centerContext.value = buildFallbackCenterContext(personId, people.value)
+      centerPersonId.value = centerContext.value?.person?.id || personId
+      return centerContext.value
+    }
   }
 
   /**
@@ -85,6 +117,7 @@ export function useGraphData() {
     graph.value = fallbackGraph
     centerPersonId.value = fallbackGraph.center_person_id || fallbackPersonId
     if (!people.value.length) people.value = getFallbackPeople()
+    centerContext.value = buildFallbackCenterContext(centerPersonId.value, people.value)
     return fallbackGraph
   }
 
@@ -163,12 +196,15 @@ export function useGraphData() {
     issues,
     relationPath,
     centerPersonId,
+    centerContext,
     isLoading,
     errorMessage,
     personNodes,
     familyUnitNodes,
     loadPeople,
     searchPeople,
+    searchCenterCandidates,
+    loadCenterContext,
     loadFocusGraph,
     loadMainlineGraph,
     loadInlawGraph,
@@ -193,6 +229,29 @@ function stripFamilyPrefix(familyUnitId) {
  */
 function isRenderableGraph(data) {
   return Array.isArray(data?.nodes) && data.nodes.length > 0
+}
+
+/**
+ * 构造本地演示中心上下文，供离线兜底和首次选择使用。
+ */
+function buildFallbackCenterContext(personId, people) {
+  const person = people.find(item => item.id === personId) || people[0]
+  if (!person) return null
+  return {
+    person,
+    available_spouses: [],
+    available_family_units: [],
+    default_mainline_depth: 3,
+    nine_kinship_summary: {
+      ancestor_depth: 4,
+      descendant_depth: 4,
+      ancestor_count: 0,
+      descendant_count: 0,
+      visible_person_count: people.length,
+      hidden_relation_count: 0
+    },
+    warnings: ['当前使用本地演示中心人物上下文']
+  }
 }
 
 /**

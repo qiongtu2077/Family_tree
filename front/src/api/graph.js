@@ -97,6 +97,24 @@ export async function getOverviewGraph(scope = 'all', maxNodes = 300) {
 }
 
 /**
+ * 搜索中心人物候选。
+ */
+export async function getCenterCandidates(keyword, limit = 20) {
+  return unwrap(
+    await apiClient.get('/graph/center-candidates', {
+      params: { keyword, limit }
+    })
+  )
+}
+
+/**
+ * 获取中心人物上下文。
+ */
+export async function getCenterContext(personId) {
+  return unwrap(await apiClient.get(`/graph/center-context/${personId}`))
+}
+
+/**
  * 查询两个人之间的关系路径。
  */
 export async function getRelationPath(fromPersonId, toPersonId) {

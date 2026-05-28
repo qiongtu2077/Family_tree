@@ -4,7 +4,10 @@
       v-model="interactions.selectedView.value"
       v-model:search-keyword="interactions.searchKeyword.value"
       :is-admin="isAdmin"
+      :center-person-name="centerPersonName"
       @search="handleSearch"
+      @open-center="openCenterModal"
+      @show-center-scope="showCenterScope"
       @open-relation="openRelationPanel"
       @open-admin="openAdminPanel"
       @logout="$emit('logout')"
@@ -70,6 +73,28 @@
       @close="interactions.isAdminPanelOpen.value = false"
       @refresh="data.loadIssues"
     />
+
+    <CenterPersonModal
+      v-model:keyword="centerKeyword"
+      :open="centerModalOpen"
+      mode="center"
+      :options="centerOptions"
+      :selected-id="selectedCenterCandidate?.id || ''"
+      @search="searchCenterPeople"
+      @select="selectedCenterCandidate = $event"
+      @confirm="confirmCenterPerson"
+      @cancel="cancelCenterSelection"
+    />
+
+    <CenterPersonModal
+      :open="parameterModalOpen"
+      :mode="parameterMode"
+      :options="parameterOptions"
+      :selected-id="selectedParameterId"
+      @select="selectedParameterOption = $event"
+      @confirm="confirmParameterSelection"
+      @cancel="cancelParameterSelection"
+    />
   </div>
 </template>
 
@@ -77,8 +102,9 @@
 /**
  * 族谱系统主视图。
  */
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import GraphIssuePanel from '../components/admin/GraphIssuePanel.vue'
+import CenterPersonModal from '../components/graph/CenterPersonModal.vue'
 import FamilyGraphCanvas from '../components/graph/FamilyGraphCanvas.vue'
 import GraphToolbar from '../components/graph/GraphToolbar.vue'
 import PersonDetailDrawer from '../components/graph/PersonDetailDrawer.vue'
@@ -96,6 +122,16 @@ defineEmits(['logout'])
 const data = useGraphData()
 const interactions = useGraphInteractions(data)
 let isRevertingView = false
+const centerModalOpen = ref(false)
+const parameterModalOpen = ref(false)
+const centerKeyword = ref('')
+const centerCandidates = ref([])
+const selectedCenterCandidate = ref(null)
+const parameterMode = ref('spouse')
+const pendingView = ref('mainline')
+const selectedParameterOption = ref(null)
+const selectedSpouseOption = ref(null)
+const selectedFamilyOption = ref(null)
 
 const viewLabels = {
   mainline: '本家主线图',
@@ -115,6 +151,17 @@ const viewHints = {
 
 const currentViewLabel = computed(() => viewLabels[interactions.selectedView.value] || '本家主线图')
 const currentViewHint = computed(() => viewHints[interactions.selectedView.value] || viewHints.mainline)
+const centerPersonName = computed(() => data.centerContext.value?.person?.name || '')
+const centerOptions = computed(() => centerCandidates.value.length ? centerCandidates.value : data.people.value)
+const parameterOptions = computed(() => {
+  if (parameterMode.value === 'family') return data.centerContext.value?.available_family_units || []
+  return data.centerContext.value?.available_spouses || []
+})
+const selectedParameterId = computed(() => {
+  if (!selectedParameterOption.value) return ''
+  if (parameterMode.value === 'family') return selectedParameterOption.value.family_unit_id || ''
+  return selectedParameterOption.value.person?.id || ''
+})
 
 watch(
   () => interactions.selectedView.value,
@@ -138,12 +185,43 @@ async function handleSearch() {
  * 聚焦到指定人物。
  */
 async function focusPerson(personId) {
-  if (interactions.selectedView.value !== 'mainline') {
-    isRevertingView = true
-    interactions.selectedView.value = 'mainline'
-  }
-  await interactions.focusPerson(personId)
+  await applyCenterPerson({ id: personId }, 'mainline')
   interactions.searchResults.value = []
+}
+
+/**
+ * 打开中心人物选择弹窗。
+ */
+function openCenterModal() {
+  selectedCenterCandidate.value = data.centerContext.value?.person || null
+  centerCandidates.value = data.people.value.slice(0, 30)
+  centerModalOpen.value = true
+}
+
+/**
+ * 搜索中心人物候选。
+ */
+async function searchCenterPeople() {
+  centerCandidates.value = await data.searchCenterCandidates(centerKeyword.value)
+}
+
+/**
+ * 确认并应用中心人物。
+ */
+async function confirmCenterPerson() {
+  if (!selectedCenterCandidate.value) return
+  centerModalOpen.value = false
+  await applyCenterPerson(selectedCenterCandidate.value, interactions.selectedView.value)
+}
+
+/**
+ * 取消中心人物选择。
+ */
+function cancelCenterSelection() {
+  centerModalOpen.value = false
+  if (!data.centerPersonId.value) {
+    data.errorMessage.value = '请选择中心人物后再加载族谱图'
+  }
 }
 
 /**
@@ -164,38 +242,45 @@ async function openAdminPanel() {
 }
 
 /**
+ * 在全景中切换为中心九族范围。
+ */
+async function showCenterScope() {
+  if (!data.centerPersonId.value) {
+    openCenterModal()
+    return
+  }
+  await data.loadOverviewGraph(`center:${data.centerPersonId.value}`, 300)
+}
+
+/**
  * 进入页面时加载默认图谱。
  */
 onMounted(async () => {
-  const warmupGraph = data.useFallbackGraph('mainline', 'demo:child')
-  const warmupPerson = warmupGraph.nodes.find(node => node.id === warmupGraph.center_person_id)
-  if (warmupPerson) interactions.selectPerson(warmupPerson)
-
   let people = []
   try {
     people = await data.loadPeople()
   } catch {
     people = []
   }
-  const demoPerson = people.find(person => person.id === 'demo:child')
-  const defaultPersonId = normalizePersonId(props.currentUser?.person_id) || demoPerson?.id || people[0]?.id || ''
-  const fallbackPersonId = defaultPersonId || 'demo:child'
-
-  try {
-    await data.loadMainlineGraph(fallbackPersonId)
-  } catch {
-    if (people[0]?.id && people[0].id !== fallbackPersonId) {
-      await data.loadMainlineGraph(people[0].id)
-    }
+  centerCandidates.value = people.slice(0, 30)
+  const defaultPersonId = normalizePersonId(props.currentUser?.person_id) || localStorage.getItem('familytree:centerPersonId') || ''
+  if (defaultPersonId) {
+    await applyCenterPerson({ id: defaultPersonId }, 'mainline')
+    return
   }
+  openCenterModal()
 })
 
 /**
  * 根据五图状态切换加载对应图谱。
  */
 async function switchGraphView(view, previousView) {
-  const centerId = getActivePersonId()
-  if (!centerId) return
+  const centerId = data.centerPersonId.value
+  if (view !== 'overview' && !centerId) {
+    pendingView.value = view
+    openCenterModal()
+    return
+  }
 
   try {
     if (view === 'mainline') {
@@ -207,25 +292,11 @@ async function switchGraphView(view, previousView) {
       return
     }
     if (view === 'branch') {
-      const branchTarget = findBranchTarget(centerId)
-      if (!branchTarget) {
-        keepPreviousView(previousView, '当前图中没有可展开的后代分支')
-        return
-      }
-      await data.loadBranchGraph(branchTarget.rootType, branchTarget.rootId)
+      await loadBranchView(previousView)
       return
     }
     if (view === 'inlaw' || view === 'bridge') {
-      const spouseLink = findSpouseLink(centerId)
-      if (!spouseLink) {
-        keepPreviousView(previousView, '请先选中一个存在配偶/伴侣关系的人物')
-        return
-      }
-      if (view === 'inlaw') {
-        await data.loadInlawGraph(spouseLink.personId, spouseLink.spouseId)
-      } else {
-        await data.loadBridgeGraph(spouseLink.personId, spouseLink.spouseId, 2, spouseLink.familyUnitId)
-      }
+      await loadSpouseDrivenView(view, previousView)
     }
   } catch {
     keepPreviousView(previousView || 'mainline', data.errorMessage.value)
@@ -233,153 +304,107 @@ async function switchGraphView(view, previousView) {
 }
 
 /**
- * 读取当前操作人物 ID。
+ * 应用新的中心人物并清空派生参数。
  */
-function getActivePersonId() {
-  return interactions.selectedPersonId.value || data.centerPersonId.value || ''
-}
+async function applyCenterPerson(person, targetView = 'mainline') {
+  const personId = person?.id
+  if (!personId) return
 
-/**
- * 从当前图中找明确的配偶/伴侣关系。
- */
-function findSpouseLink(personId) {
-  const graph = data.graph.value
-  const personIds = new Set(graph.nodes.filter(node => node.type === 'person').map(node => node.id))
-  const preferredId = personIds.has(personId) ? personId : data.centerPersonId.value
-  const spouseEdge = graph.edges.find(edge => (
-    edge.relation === 'spouse' &&
-    (edge.source === preferredId || edge.target === preferredId)
-  ))
-  if (spouseEdge) {
-    return {
-      personId: preferredId,
-      spouseId: spouseEdge.source === preferredId ? spouseEdge.target : spouseEdge.source,
-      familyUnitId: null
-    }
+  localStorage.setItem('familytree:centerPersonId', personId)
+  selectedSpouseOption.value = null
+  selectedFamilyOption.value = null
+  selectedParameterOption.value = null
+  await data.loadCenterContext(personId)
+  interactions.selectPerson(data.centerContext.value?.person || person)
+
+  if (targetView !== interactions.selectedView.value) {
+    isRevertingView = true
+    interactions.selectedView.value = targetView
   }
+  await switchGraphView(targetView, 'mainline')
+}
 
-  const familiesByPerson = new Map()
-  graph.edges.forEach(edge => {
-    if (!edge.target?.startsWith?.('family:')) return
-    if (!personIds.has(edge.source)) return
-    if (!familiesByPerson.has(edge.target)) familiesByPerson.set(edge.target, [])
-    familiesByPerson.get(edge.target).push(edge.source)
-  })
-
-  for (const [familyUnitId, partners] of familiesByPerson.entries()) {
-    if (!partners.includes(preferredId) || partners.length < 2) continue
-    return {
-      personId: preferredId,
-      spouseId: partners.find(id => id !== preferredId),
-      familyUnitId: familyUnitId.replace(/^family:/, '')
-    }
+/**
+ * 加载依赖配偶的视图。
+ */
+async function loadSpouseDrivenView(view, previousView) {
+  const spouseOptions = data.centerContext.value?.available_spouses || []
+  if (!selectedSpouseOption.value && spouseOptions.length === 1) {
+    selectedSpouseOption.value = spouseOptions[0]
   }
-
-  return null
-}
-
-/**
- * 从当前图中找后代分支根节点。
- */
-function findBranchTarget(personId) {
-  const graph = data.graph.value
-  const index = buildFamilyIndex(graph)
-  const ownFamilyId = index.partnerFamiliesByPerson.get(personId)?.find(familyId => (
-    index.childrenByFamily.get(familyId)?.length
-  ))
-  if (ownFamilyId) return { rootType: 'familyUnit', rootId: ownFamilyId }
-
-  const ancestorFamilyId = findAncestorBranchRoot(index, personId)
-  if (ancestorFamilyId) return { rootType: 'familyUnit', rootId: ancestorFamilyId }
-
-  if (personId) return { rootType: 'person', rootId: personId }
-  return null
-}
-
-/**
- * 构建当前图中的家庭关系索引，供视图切换选择根节点。
- */
-function buildFamilyIndex(graph) {
-  const familyOrders = new Map()
-  const childrenByFamily = new Map()
-  const partnersByFamily = new Map()
-  const partnerFamiliesByPerson = new Map()
-  const parentFamiliesByChild = new Map()
-
-  graph.nodes
-    .filter(node => node.type === 'familyUnit')
-    .forEach(node => {
-      familyOrders.set(node.id, Number(node.display_order || node.displayOrder || 0))
-    })
-
-  graph.edges.forEach(edge => {
-    if (edge.target?.startsWith?.('family:')) {
-      pushIndex(partnersByFamily, edge.target, edge.source)
-      pushIndex(partnerFamiliesByPerson, edge.source, edge.target)
+  if (!selectedSpouseOption.value) {
+    if (!spouseOptions.length) {
+      keepPreviousView(previousView, '当前中心人物暂无配偶/伴侣关系，无法打开该视图')
       return
     }
-    if (edge.source?.startsWith?.('family:')) {
-      pushIndex(childrenByFamily, edge.source, edge.target)
-      pushIndex(parentFamiliesByChild, edge.target, edge.source)
-    }
-  })
-
-  return {
-    childrenByFamily,
-    partnersByFamily,
-    partnerFamiliesByPerson,
-    parentFamiliesByChild,
-    familyOrders
+    openParameterModal('spouse', view)
+    return
   }
+  if (view === 'inlaw') {
+    await data.loadInlawGraph(data.centerPersonId.value, selectedSpouseOption.value.person.id)
+    return
+  }
+  await data.loadBridgeGraph(
+    data.centerPersonId.value,
+    selectedSpouseOption.value.person.id,
+    2,
+    selectedSpouseOption.value.family_unit_id
+  )
 }
 
 /**
- * 找到能覆盖当前人物的最上层祖先家庭，避免无后代人物切到空分支。
+ * 加载后代分支视图。
  */
-function findAncestorBranchRoot(index, personId) {
-  const candidates = [...index.childrenByFamily.keys()]
-    .filter(familyId => familyContainsDescendant(index, familyId, personId, new Set()))
-    .sort((left, right) => compareFamilyOrder(index, left, right))
-
-  const rootCandidate = candidates.find(familyId => (
-    (index.partnersByFamily.get(familyId) || []).every(partnerId => (
-      !index.parentFamiliesByChild.has(partnerId)
-    ))
-  ))
-  return rootCandidate || index.parentFamiliesByChild.get(personId)?.[0] || null
+async function loadBranchView(previousView) {
+  const familyOptions = data.centerContext.value?.available_family_units || []
+  if (!selectedFamilyOption.value && familyOptions.length === 1) {
+    selectedFamilyOption.value = familyOptions[0]
+  }
+  if (!selectedFamilyOption.value && familyOptions.length > 1) {
+    openParameterModal('family', 'branch')
+    return
+  }
+  if (selectedFamilyOption.value) {
+    await data.loadBranchGraph('familyUnit', selectedFamilyOption.value.family_unit_id)
+    return
+  }
+  if (data.centerPersonId.value) {
+    await data.loadBranchGraph('person', data.centerPersonId.value)
+    return
+  }
+  keepPreviousView(previousView, '请选择后代分支根节点')
 }
 
 /**
- * 判断某个家庭单元向下展开后是否包含指定人物。
+ * 打开五图参数选择弹窗。
  */
-function familyContainsDescendant(index, familyId, personId, visitedFamilies) {
-  if (visitedFamilies.has(familyId)) return false
-  visitedFamilies.add(familyId)
-
-  const children = index.childrenByFamily.get(familyId) || []
-  if (children.includes(personId)) return true
-
-  return children.some(childId => (
-    (index.partnerFamiliesByPerson.get(childId) || []).some(childFamilyId => (
-      familyContainsDescendant(index, childFamilyId, personId, visitedFamilies)
-    ))
-  ))
+function openParameterModal(mode, view) {
+  parameterMode.value = mode
+  pendingView.value = view
+  selectedParameterOption.value = null
+  parameterModalOpen.value = true
 }
 
 /**
- * 按家庭显示顺序和 ID 稳定排序。
+ * 确认五图参数选择。
  */
-function compareFamilyOrder(index, left, right) {
-  return Number(index.familyOrders.get(left) || 0) - Number(index.familyOrders.get(right) || 0) ||
-    String(left).localeCompare(String(right))
+async function confirmParameterSelection() {
+  if (!selectedParameterOption.value) return
+  parameterModalOpen.value = false
+  if (parameterMode.value === 'spouse') {
+    selectedSpouseOption.value = selectedParameterOption.value
+  } else {
+    selectedFamilyOption.value = selectedParameterOption.value
+  }
+  await switchGraphView(pendingView.value, interactions.selectedView.value)
 }
 
 /**
- * 向索引数组桶添加不重复值。
+ * 取消五图参数选择。
  */
-function pushIndex(map, key, value) {
-  if (!map.has(key)) map.set(key, [])
-  if (!map.get(key).includes(value)) map.get(key).push(value)
+function cancelParameterSelection() {
+  parameterModalOpen.value = false
+  keepPreviousView('mainline', '已取消图谱参数选择')
 }
 
 /**

@@ -4,7 +4,7 @@ Neo4j 族谱图谱 API
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..graph_schemas import GraphIssue, GraphViewResponse, RelationPathResponse
+from ..graph_schemas import CenterContextResponse, GraphIssue, GraphPerson, GraphViewResponse, RelationPathResponse
 from ..neo4j import get_neo4j_session
 from ..repositories.graph_repository import GraphRepository
 from ..services.graph_view_service import GraphViewService
@@ -119,6 +119,27 @@ def get_overview_graph(
     if not graph:
         raise HTTPException(status_code=404, detail="当前范围没有可展示图谱")
     return graph
+
+
+@router.get("/center-candidates", response_model=list[GraphPerson])
+def get_center_candidates(
+    keyword: str = Query(..., min_length=1, description="中心人物姓名关键词"),
+    limit: int = Query(20, ge=1, le=50, description="候选数量上限"),
+    session=Depends(get_neo4j_session),
+):
+    """搜索中心人物候选。"""
+    service = GraphViewService(GraphRepository(session))
+    return service.get_center_candidates(keyword, limit)
+
+
+@router.get("/center-context/{person_id}", response_model=CenterContextResponse)
+def get_center_context(person_id: str, session=Depends(get_neo4j_session)):
+    """获取中心人物上下文。"""
+    service = GraphViewService(GraphRepository(session))
+    context = service.get_center_context(person_id)
+    if not context:
+        raise HTTPException(status_code=404, detail="中心人物不存在")
+    return context
 
 
 @router.get("/relation-path", response_model=RelationPathResponse)

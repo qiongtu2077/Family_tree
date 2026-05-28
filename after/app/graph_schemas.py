@@ -14,6 +14,7 @@ Gender = Literal["M", "F", "U"]
 FamilyUnitType = Literal["marriage", "partner", "single_parent", "unknown_parent", "adoptive"]
 RelationshipType = Literal["partner", "child", "parent_child", "spouse"]
 ViewMode = Literal["mainline", "inlaw", "bridge", "path", "branch", "overview"]
+BranchTargetView = Literal["mainline", "inlaw", "bridge", "branch", "overview"]
 
 
 class GraphPerson(BaseModel):
@@ -45,6 +46,21 @@ class GraphFamilyUnit(BaseModel):
     display_order: int = 0
 
 
+class GraphBranchCapsule(BaseModel):
+    """折叠分支入口节点。"""
+
+    id: str
+    type: Literal["branchCapsule"] = "branchCapsule"
+    title: str
+    owner_person_id: str | None = None
+    root_family_unit_id: str | None = None
+    relation_to_center: str = "旁支"
+    person_count: int = 0
+    generation_count: int = 0
+    preview_names: list[str] = Field(default_factory=list)
+    target_view: BranchTargetView = "branch"
+
+
 class GraphEdge(BaseModel):
     """图谱连线。"""
 
@@ -62,9 +78,50 @@ class GraphViewResponse(BaseModel):
 
     view_mode: ViewMode
     center_person_id: str | None = None
-    nodes: list[GraphPerson | GraphFamilyUnit]
+    nodes: list[GraphPerson | GraphFamilyUnit | GraphBranchCapsule]
     edges: list[GraphEdge]
     hidden_relation_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CenterFamilyOption(BaseModel):
+    """中心人物可切换的家庭单元选项。"""
+
+    family_unit_id: str
+    label: str
+    family_type: FamilyUnitType = "marriage"
+    spouse_ids: list[str] = Field(default_factory=list)
+    spouse_names: list[str] = Field(default_factory=list)
+    child_count: int = 0
+
+
+class CenterSpouseOption(BaseModel):
+    """中心人物可选择的配偶/伴侣选项。"""
+
+    person: GraphPerson
+    family_unit_id: str | None = None
+    child_count: int = 0
+
+
+class NineKinshipSummary(BaseModel):
+    """中心人物九族范围摘要。"""
+
+    ancestor_depth: int = 4
+    descendant_depth: int = 4
+    ancestor_count: int = 0
+    descendant_count: int = 0
+    visible_person_count: int = 0
+    hidden_relation_count: int = 0
+
+
+class CenterContextResponse(BaseModel):
+    """中心人物上下文，用于前端五图参数选择。"""
+
+    person: GraphPerson
+    available_spouses: list[CenterSpouseOption] = Field(default_factory=list)
+    available_family_units: list[CenterFamilyOption] = Field(default_factory=list)
+    default_mainline_depth: int = 3
+    nine_kinship_summary: NineKinshipSummary = Field(default_factory=NineKinshipSummary)
     warnings: list[str] = Field(default_factory=list)
 
 

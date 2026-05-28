@@ -52,6 +52,7 @@ export async function layoutGraph(graph) {
 function buildFamilyModel(graph) {
   const viewMode = graph.view_mode || 'mainline'
   const persons = graph.nodes.filter(node => node.type === 'person')
+  const branchCapsules = graph.nodes.filter(node => node.type === 'branchCapsule')
   const personMap = new Map(persons.map(person => [person.id, person]))
   const familyMap = new Map(
     graph.nodes
@@ -86,6 +87,7 @@ function buildFamilyModel(graph) {
   return {
     ...model,
     viewMode,
+    branchCapsules,
     centerPersonId: graph.center_person_id || null
   }
 }
@@ -227,7 +229,7 @@ function layoutMainline(model) {
   placePerson(state, model.centerPersonId, 0, TOP_PADDING + centerLevel * LEVEL_GAP)
   layoutAncestorFamilies(state, model.centerPersonId, 0, centerLevel, new Set())
   layoutDescendantFamilies(state, model.centerPersonId, 0, centerLevel, new Set())
-  layoutRemainingPersons(state, PERSON_SIZE.width + FAMILY_GAP)
+  layoutFormalCapsules(state, PERSON_SIZE.width + FAMILY_GAP)
   return {
     nodes: state.nodes,
     edges: state.edges
@@ -286,7 +288,7 @@ function layoutGenealogy(model) {
     cursor += width + FAMILY_GAP
   })
 
-  layoutRemainingPersons(state, cursor)
+  layoutFormalCapsules(state, cursor)
   return {
     nodes: state.nodes,
     edges: state.edges
@@ -388,7 +390,36 @@ function compareFamilies(left, right) {
 }
 
 /**
- * 布局尚未被家庭递归覆盖的人物。
+ * 布局正式图中的折叠胶囊，避免把无关人物追加成孤儿节点。
+ */
+function layoutFormalCapsules(state, startX) {
+  const explicitCapsules = state.branchCapsules || []
+  let cursor = startX
+  explicitCapsules.forEach(capsule => {
+    placeBranchCapsule(state, capsule, cursor, TOP_PADDING)
+    cursor += PERSON_SIZE.width * 1.9 + SIBLING_GAP
+  })
+
+  const hiddenPersons = state.persons.filter(person => !state.placedPersons.has(person.id))
+  if (hiddenPersons.length) {
+    placeBranchCapsule(
+      state,
+      {
+        id: `capsule:hidden:${state.viewMode}`,
+        title: `已折叠旁支 · ${hiddenPersons.length} 人`,
+        person_count: hiddenPersons.length,
+        generation_count: 0,
+        preview_names: hiddenPersons.slice(0, 3).map(person => person.name),
+        target_view: 'overview'
+      },
+      cursor,
+      TOP_PADDING
+    )
+  }
+}
+
+/**
+ * 布局全景中尚未被分簇覆盖的人物。
  */
 function layoutRemainingPersons(state, startX) {
   let cursor = startX
@@ -737,6 +768,38 @@ function placeOverviewPerson(state, personId, x, y) {
   state.placedPersons.add(personId)
   state.nodes.push(toPersonNode(person, position, OVERVIEW_PERSON_SIZE))
   return position
+}
+
+/**
+ * 放置折叠分支胶囊。
+ */
+function placeBranchCapsule(state, capsule, x, y) {
+  state.nodes.push({
+    id: capsule.id,
+    x,
+    y,
+    type: 'rect',
+    label: capsule.title,
+    nodeType: 'branchCapsule',
+    raw: capsule,
+    size: [PERSON_SIZE.width * 1.65, PERSON_SIZE.height * 0.82],
+    style: {
+      radius: 18,
+      fill: 'rgba(212, 175, 55, 0.12)',
+      stroke: 'rgba(255, 238, 137, 0.42)',
+      lineWidth: 1.4,
+      lineDash: [5, 4],
+      shadowColor: GRAPH_STYLE.nodeShadow,
+      shadowBlur: 10
+    },
+    labelCfg: {
+      style: {
+        fill: '#f5e7ad',
+        fontSize: 12,
+        fontWeight: 700
+      }
+    }
+  })
 }
 
 /**

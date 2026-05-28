@@ -30,6 +30,16 @@
     </nav>
 
     <div class="toolbar-actions">
+      <button class="center-btn" @click="$emit('openCenter')">
+        中心人物：{{ centerPersonName || '未选择' }}
+      </button>
+      <button
+        v-if="modelValue === 'overview' && centerPersonName"
+        class="center-scope-btn"
+        @click="$emit('showCenterScope')"
+      >
+        只看中心九族
+      </button>
       <button class="relation-btn" @click="$emit('openRelation')">关系路径</button>
       <button v-if="isAdmin" @click="$emit('openAdmin')">管理诊断</button>
       <button class="ghost-btn" @click="$emit('logout')">退出</button>
@@ -44,13 +54,16 @@
 defineProps({
   modelValue: { type: String, required: true },
   searchKeyword: { type: String, default: '' },
-  isAdmin: { type: Boolean, default: false }
+  isAdmin: { type: Boolean, default: false },
+  centerPersonName: { type: String, default: '' }
 })
 
 defineEmits([
   'update:modelValue',
   'update:searchKeyword',
   'search',
+  'openCenter',
+  'showCenterScope',
   'openRelation',
   'openAdmin',
   'logout'
@@ -162,6 +175,18 @@ p {
   color: #f5e7ad;
   border: 1px solid rgba(212, 175, 55, 0.22);
   background: rgba(212, 175, 55, 0.1);
+}
+
+.toolbar-actions .center-btn,
+.toolbar-actions .center-scope-btn {
+  color: #111;
+  background: linear-gradient(135deg, #fffa00 0%, #d4af37 100%);
+}
+
+.toolbar-actions .center-scope-btn {
+  color: #f7efd0;
+  border: 1px solid rgba(255, 250, 0, 0.28);
+  background: rgba(255, 250, 0, 0.1);
 }
 
 @media (max-width: 1120px) {

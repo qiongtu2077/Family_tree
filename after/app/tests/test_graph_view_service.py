@@ -95,6 +95,41 @@ class FakeRepository:
             }
         ]
 
+    def get_center_candidates(self, keyword, limit):
+        """返回中心人物候选。"""
+        return [
+            FakeNode(["Person"], {"personId": "p2", "name": "孩子", "gender": "F"})
+        ]
+
+    def get_center_context(self, person_id):
+        """返回中心人物上下文。"""
+        center = FakeNode(["Person"], {"personId": person_id, "name": "孩子", "gender": "F"})
+        spouse = FakeNode(["Person"], {"personId": "p3", "name": "配偶", "gender": "M"})
+        return {
+            "person": center,
+            "available_spouses": [
+                {"person": spouse, "family_unit_id": "f2", "child_count": 1}
+            ],
+            "available_family_units": [
+                {
+                    "family_unit_id": "f2",
+                    "label": "婚姻家庭",
+                    "family_type": "marriage",
+                    "spouse_ids": [person_id, "p3"],
+                    "spouse_names": ["孩子", "配偶"],
+                    "child_count": 1,
+                }
+            ],
+            "default_mainline_depth": 3,
+            "nine_kinship_summary": {
+                "ancestor_count": 2,
+                "descendant_count": 1,
+                "visible_person_count": 4,
+                "hidden_relation_count": 0,
+            },
+            "warnings": [],
+        }
+
 
 def test_focus_graph_builds_person_family_unit_and_edges():
     """中心图应包含人物、家庭单元和语义化连线。"""
@@ -136,3 +171,26 @@ def test_graph_issues_are_normalized():
     assert len(issues) == 1
     assert issues[0].person_id == "p3"
     assert issues[0].issue_type == "isolated_person"
+
+
+def test_center_context_exposes_spouses_and_family_units():
+    """中心上下文应返回五图切换所需的配偶和家庭单元。"""
+    service = GraphViewService(FakeRepository())
+
+    context = service.get_center_context("p2")
+
+    assert context.person.id == "p2"
+    assert context.available_spouses[0].person.id == "p3"
+    assert context.available_spouses[0].family_unit_id == "f2"
+    assert context.available_family_units[0].family_unit_id == "f2"
+    assert context.nine_kinship_summary.visible_person_count == 4
+
+
+def test_center_candidates_are_normalized_people():
+    """中心人物候选必须规范化为 GraphPerson。"""
+    service = GraphViewService(FakeRepository())
+
+    candidates = service.get_center_candidates("孩", 20)
+
+    assert candidates[0].id == "p2"
+    assert candidates[0].name == "孩子"

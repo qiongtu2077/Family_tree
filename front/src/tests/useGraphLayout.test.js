@@ -232,4 +232,32 @@ describe('useGraphLayout', () => {
     expect(wifeSibling.x).toBeGreaterThan(wife.x)
     expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
   })
+
+  it('folds unrelated formal-view people into a branch capsule instead of drawing orphans', async () => {
+    const data = await layoutGraph({
+      view_mode: 'mainline',
+      center_person_id: 'child',
+      nodes: [
+        { id: 'father', type: 'person', name: '父亲' },
+        { id: 'mother', type: 'person', name: '母亲' },
+        { id: 'child', type: 'person', name: '孩子' },
+        { id: 'remote', type: 'person', name: '远房旁支' },
+        { id: 'family:f1', type: 'familyUnit' }
+      ],
+      edges: [
+        { id: 'e1', source: 'father', target: 'family:f1', relation: 'partner' },
+        { id: 'e2', source: 'mother', target: 'family:f1', relation: 'partner' },
+        { id: 'e3', source: 'family:f1', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const personIds = data.nodes
+      .filter(node => node.nodeType === 'person')
+      .map(node => node.id)
+    const capsule = data.nodes.find(node => node.nodeType === 'branchCapsule')
+
+    expect(personIds).toEqual(['child', 'father', 'mother'])
+    expect(personIds).not.toContain('remote')
+    expect(capsule.label).toContain('已折叠旁支')
+  })
 })

@@ -170,6 +170,10 @@ class GraphRepository:
         limit = _safe_limit(max_nodes)
         normalized_scope = (scope or "all").strip()
 
+        if normalized_scope.startswith("center:"):
+            center_person_id = normalized_scope.replace("center:", "", 1)
+            return self.get_focus_graph(center_person_id, 4)
+
         if normalized_scope not in {"all", "demo"}:
             return self._get_family_scope_overview(normalized_scope, limit)
 
@@ -192,6 +196,52 @@ class GraphRepository:
             "hidden_relation_count": max(total_count - limit, 0),
             "warnings": warnings,
             **edges,
+        }
+
+    def get_center_candidates(self, keyword: str, limit: int) -> list[Any]:
+        """读取中心人物候选，最终选择必须落到真实 Person。"""
+        safe_keyword = (keyword or "").strip()
+        if not safe_keyword:
+            return []
+
+        query = """
+        MATCH (person:Person)
+        WHERE toLower(person.name) CONTAINS toLower($keyword)
+        RETURN person
+        ORDER BY person.name, person.birthDate, person.personId
+        LIMIT $limit
+        """
+        return [
+            record["person"]
+            for record in self.session.run(
+                query,
+                keyword=safe_keyword,
+                limit=min(max(int(limit), 1), 50),
+            )
+        ]
+
+    def get_center_context(self, person_id: str) -> dict[str, Any] | None:
+        """读取中心人物上下文和五图参数候选。"""
+        person = self._get_person_node(person_id)
+        if not person:
+            return None
+
+        spouse_options = self._get_center_spouse_options(person_id)
+        family_options = self._get_center_family_options(person_id)
+        summary = self._get_nine_kinship_summary(person_id)
+        warnings = []
+        if not spouse_options:
+            warnings.append("当前中心人物暂无配偶/伴侣家庭，姻亲谱系和联姻桥接需要先补充关系")
+        if not family_options:
+            warnings.append("当前中心人物暂无可展开家庭单元，后代分支可能只显示本人")
+
+        return {
+            "person": person,
+            "available_spouses": spouse_options,
+            "available_family_units": family_options,
+            "default_mainline_depth": 3,
+            "nine_kinship_summary": summary,
+            "warnings": warnings,
         }
 
     def get_relation_path(self, from_person_id: str, to_person_id: str) -> dict[str, Any] | None:
@@ -435,6 +485,85 @@ class GraphRepository:
         total_record = self.session.run(count_query).single()
         persons = [record["person"] for record in self.session.run(people_query, limit=limit)]
         return persons, int(total_record["total_count"] if total_record else len(persons))
+
+    def _get_center_spouse_options(self, person_id: str) -> list[dict[str, Any]]:
+        """读取中心人物的配偶/伴侣候选。"""
+        query = """
+        MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)<-[:PARTNER_IN]-(spouse:Person)
+        WHERE spouse.personId <> $person_id
+        OPTIONAL MATCH (unit)-[:HAS_CHILD]->(child:Person)
+        RETURN spouse AS person,
+               unit.familyUnitId AS family_unit_id,
+               count(DISTINCT child) AS child_count
+        ORDER BY unit.displayOrder, spouse.name, spouse.personId
+        """
+        return [
+            {
+                "person": record["person"],
+                "family_unit_id": record["family_unit_id"],
+                "child_count": record["child_count"],
+            }
+            for record in self.session.run(query, person_id=str(person_id))
+        ]
+
+    def _get_center_family_options(self, person_id: str) -> list[dict[str, Any]]:
+        """读取中心人物可作为后代根或桥接根的家庭单元。"""
+        query = """
+        MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)
+        OPTIONAL MATCH (partner:Person)-[:PARTNER_IN]->(unit)
+        OPTIONAL MATCH (unit)-[:HAS_CHILD]->(child:Person)
+        WITH unit,
+             collect(DISTINCT partner.personId) AS spouse_ids,
+             collect(DISTINCT partner.name) AS spouse_names,
+             count(DISTINCT child) AS child_count
+        RETURN unit.familyUnitId AS family_unit_id,
+               coalesce(unit.type, 'marriage') AS family_type,
+               coalesce(unit.label, '家庭单元') AS label,
+               spouse_ids,
+               spouse_names,
+               child_count
+        ORDER BY unit.displayOrder, unit.familyUnitId
+        """
+        return [
+            {
+                "family_unit_id": record["family_unit_id"],
+                "family_type": record["family_type"],
+                "label": record["label"],
+                "spouse_ids": record["spouse_ids"],
+                "spouse_names": record["spouse_names"],
+                "child_count": record["child_count"],
+            }
+            for record in self.session.run(query, person_id=str(person_id))
+        ]
+
+    def _get_nine_kinship_summary(self, person_id: str) -> dict[str, Any]:
+        """统计中心人物九代包络的轻量摘要。"""
+        query = """
+        MATCH (center:Person {personId: $person_id})
+        OPTIONAL MATCH ancestorPath=(ancestor:Person)-[:PARENT_OF*1..4]->(center)
+        OPTIONAL MATCH descendantPath=(center)-[:PARENT_OF*1..4]->(descendant:Person)
+        WITH center,
+             collect(DISTINCT ancestor) AS ancestors,
+             collect(DISTINCT descendant) AS descendants
+        WITH center, ancestors, descendants, [center] + ancestors + descendants AS visible_people
+        RETURN size(ancestors) AS ancestor_count,
+               size(descendants) AS descendant_count,
+               size(visible_people) AS visible_person_count
+        """
+        record = self.session.run(query, person_id=str(person_id)).single()
+        if not record:
+            return {
+                "ancestor_count": 0,
+                "descendant_count": 0,
+                "visible_person_count": 1,
+                "hidden_relation_count": 0,
+            }
+        return {
+            "ancestor_count": int(record["ancestor_count"] or 0),
+            "descendant_count": int(record["descendant_count"] or 0),
+            "visible_person_count": int(record["visible_person_count"] or 1),
+            "hidden_relation_count": 0,
+        }
 
     def _get_scoped_family_units(self, scope: str) -> list[Any]:
         """按 all/demo 范围读取家庭单元。"""

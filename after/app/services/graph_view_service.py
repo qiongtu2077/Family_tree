@@ -7,11 +7,16 @@ from __future__ import annotations
 from typing import Any
 
 from ..graph_schemas import (
+    CenterContextResponse,
+    CenterFamilyOption,
+    CenterSpouseOption,
+    GraphBranchCapsule,
     GraphEdge,
     GraphFamilyUnit,
     GraphIssue,
     GraphPerson,
     GraphViewResponse,
+    NineKinshipSummary,
 )
 from ..repositories.graph_repository import GraphRepository
 
@@ -121,6 +126,51 @@ class GraphViewService:
             )
         return issues
 
+    def get_center_candidates(self, keyword: str, limit: int) -> list[GraphPerson]:
+        """按姓名搜索中心人物候选。"""
+        return [
+            _to_person_node(person)
+            for person in self.repository.get_center_candidates(keyword, limit)
+        ]
+
+    def get_center_context(self, person_id: str) -> CenterContextResponse | None:
+        """生成中心人物上下文和五图可选参数。"""
+        raw_context = self.repository.get_center_context(person_id)
+        if not raw_context:
+            return None
+
+        person = _to_person_node(raw_context["person"])
+        spouses = [
+            CenterSpouseOption(
+                person=_to_person_node(item["person"]),
+                family_unit_id=item.get("family_unit_id"),
+                child_count=int(item.get("child_count", 0) or 0),
+            )
+            for item in raw_context.get("available_spouses", [])
+            if item.get("person")
+        ]
+        family_units = [
+            CenterFamilyOption(
+                family_unit_id=str(item.get("family_unit_id", "")),
+                label=str(item.get("label", "家庭单元")),
+                family_type=item.get("family_type") or "marriage",
+                spouse_ids=[str(value) for value in item.get("spouse_ids", []) if value],
+                spouse_names=[str(value) for value in item.get("spouse_names", []) if value],
+                child_count=int(item.get("child_count", 0) or 0),
+            )
+            for item in raw_context.get("available_family_units", [])
+            if item.get("family_unit_id")
+        ]
+        summary_data = raw_context.get("nine_kinship_summary", {})
+        return CenterContextResponse(
+            person=person,
+            available_spouses=spouses,
+            available_family_units=family_units,
+            default_mainline_depth=int(raw_context.get("default_mainline_depth", 3) or 3),
+            nine_kinship_summary=NineKinshipSummary(**summary_data),
+            warnings=[str(warning) for warning in raw_context.get("warnings", [])],
+        )
+
     # --- 数据转换 --- #
 
     def _build_graph_response(
@@ -152,10 +202,15 @@ class GraphViewService:
                     seen_edges.add(edge.id)
 
         warnings = [*raw_graph.get("warnings", []), *_build_warnings(persons, family_units, edges)]
+        branch_capsules = [
+            _to_branch_capsule(item)
+            for item in raw_graph.get("branch_capsules", [])
+            if item
+        ]
         return GraphViewResponse(
             view_mode=view_mode,
             center_person_id=center_person_id,
-            nodes=[*persons, *family_units],
+            nodes=[*persons, *family_units, *branch_capsules],
             edges=edges,
             hidden_relation_count=int(raw_graph.get("hidden_relation_count", 0) or 0),
             warnings=warnings,
@@ -205,6 +260,21 @@ def _to_family_unit_node(node) -> GraphFamilyUnit:
         family_type=family_type,
         label=_family_unit_label(family_type),
         display_order=int(data.get("displayOrder", data.get("display_order", 0)) or 0),
+    )
+
+
+def _to_branch_capsule(data: dict[str, Any]) -> GraphBranchCapsule:
+    """把折叠分支摘要转换为前端胶囊节点。"""
+    return GraphBranchCapsule(
+        id=str(data.get("id")),
+        title=str(data.get("title", "折叠分支")),
+        owner_person_id=data.get("owner_person_id"),
+        root_family_unit_id=data.get("root_family_unit_id"),
+        relation_to_center=str(data.get("relation_to_center", "旁支")),
+        person_count=int(data.get("person_count", 0) or 0),
+        generation_count=int(data.get("generation_count", 0) or 0),
+        preview_names=[str(name) for name in data.get("preview_names", []) if name],
+        target_view=data.get("target_view", "branch"),
     )
 
 

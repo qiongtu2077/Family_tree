@@ -4,6 +4,8 @@ import {
   getBranchGraph,
   getBranchGraphByRoot,
   getBridgeGraph,
+  getCenterCandidates,
+  getCenterContext,
   getFocusGraph,
   getGraphIssues,
   getInlawGraph,
@@ -17,6 +19,8 @@ vi.mock('../api/graph', () => ({
   getBranchGraph: vi.fn(),
   getBranchGraphByRoot: vi.fn(),
   getBridgeGraph: vi.fn(),
+  getCenterCandidates: vi.fn(),
+  getCenterContext: vi.fn(),
   getFocusGraph: vi.fn(),
   getGraphIssues: vi.fn(),
   getInlawGraph: vi.fn(),
@@ -73,6 +77,26 @@ describe('useGraphData', () => {
     expect(data.personNodes.value).toHaveLength(1)
     expect(data.familyUnitNodes.value).toHaveLength(1)
     expect(data.isLoading.value).toBe(false)
+  })
+
+  it('loads center candidates and center context', async () => {
+    getCenterCandidates.mockResolvedValue([{ id: 'p1', name: '张三' }])
+    getCenterContext.mockResolvedValue({
+      person: { id: 'p1', type: 'person', name: '张三' },
+      available_spouses: [{ person: { id: 'p2', name: '李四' }, family_unit_id: 'f1' }],
+      available_family_units: [{ family_unit_id: 'f1', label: '婚姻家庭' }],
+      nine_kinship_summary: { visible_person_count: 2 },
+      warnings: []
+    })
+    const data = useGraphData()
+
+    const candidates = await data.searchCenterCandidates('张')
+    const context = await data.loadCenterContext('p1')
+
+    expect(candidates[0].id).toBe('p1')
+    expect(context.person.id).toBe('p1')
+    expect(data.centerPersonId.value).toBe('p1')
+    expect(data.centerContext.value.available_spouses[0].family_unit_id).toBe('f1')
   })
 
   it('loads all five formal graph views with dedicated APIs', async () => {
