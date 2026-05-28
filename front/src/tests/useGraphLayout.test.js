@@ -38,7 +38,11 @@ describe('useGraphLayout', () => {
 
     expect(data.nodes).toHaveLength(2)
     expect(data.nodes[0].label).toContain('父亲')
+    expect(data.nodes[0].x).toBe(82)
+    expect(data.nodes[0].y).toBe(37)
     expect(data.nodes[1].nodeType).toBe('familyUnit')
+    expect(data.nodes[1].x).toBe(113)
+    expect(data.nodes[1].y).toBe(93)
     expect(data.edges[0].type).toBe('line')
   })
 
@@ -89,7 +93,7 @@ describe('useGraphLayout', () => {
     })
 
     expect(data.nodes[0].label).toContain('1950-2020')
-    expect(data.nodes[0].style.stroke).toBe('#c75b7a')
+    expect(data.nodes[0].style.stroke).toBe('#d4af37')
     expect(data.edges.find(edge => edge.id === 'e-highlight').style.lineWidth).toBe(4)
     expect(data.edges.find(edge => edge.id === 'e-dashed').style.lineDash).toEqual([6, 5])
     expect(data.edges.find(edge => edge.id === 'e-solid').style.endArrow).toBe(true)

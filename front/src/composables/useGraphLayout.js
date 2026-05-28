@@ -74,19 +74,23 @@ function toElkEdge(edge) {
  * 把节点转换为 G6 渲染数据。
  */
 function toG6Node(node, position = {}) {
+  const size = node.type === 'familyUnit' ? FAMILY_UNIT_SIZE : PERSON_SIZE
+  const x = (position.x || 0) + size.width / 2
+  const y = (position.y || 0) + size.height / 2
+
   if (node.type === 'familyUnit') {
     return {
       id: node.id,
-      x: position.x || 0,
-      y: position.y || 0,
+      x,
+      y,
       type: 'circle',
       size: FAMILY_UNIT_SIZE.width,
       label: '',
       nodeType: 'familyUnit',
       raw: node,
       style: {
-        fill: '#f7c948',
-        stroke: '#5d4712',
+        fill: '#fffa00',
+        stroke: '#101010',
         lineWidth: 2
       }
     }
@@ -94,8 +98,8 @@ function toG6Node(node, position = {}) {
 
   return {
     id: node.id,
-    x: position.x || 0,
-    y: position.y || 0,
+    x,
+    y,
     type: 'rect',
     label: buildPersonLabel(node),
     nodeType: 'person',
@@ -103,15 +107,15 @@ function toG6Node(node, position = {}) {
     size: [PERSON_SIZE.width, PERSON_SIZE.height],
     style: {
       radius: 16,
-      fill: node.gender === 'F' ? '#fff1f5' : '#eef6ff',
-      stroke: node.gender === 'F' ? '#c75b7a' : '#3b74b7',
+      fill: '#191919',
+      stroke: node.gender === 'F' ? '#d4af37' : '#fffa00',
       lineWidth: 2,
-      shadowColor: 'rgba(20, 33, 61, 0.16)',
-      shadowBlur: 12
+      shadowColor: 'rgba(255, 250, 0, 0.22)',
+      shadowBlur: 16
     },
     labelCfg: {
       style: {
-        fill: '#18202f',
+        fill: '#f0f0f0',
         fontSize: 13,
         fontWeight: 700,
         lineHeight: 18
@@ -143,7 +147,7 @@ function toG6Edge(edge) {
     raw: edge,
     type: edge.style === 'spouse' ? 'line' : 'polyline',
     style: {
-      stroke: edge.style === 'highlight' ? '#d97706' : '#7b8794',
+      stroke: edge.style === 'highlight' ? '#fffa00' : '#666666',
       lineWidth: edge.style === 'highlight' ? 4 : 2,
       lineDash: edge.style === 'dashed' ? [6, 5] : null,
       endArrow: edge.style === 'spouse' ? false : true
@@ -151,10 +155,10 @@ function toG6Edge(edge) {
     labelCfg: {
       autoRotate: true,
       style: {
-        fill: '#5f6b7a',
+        fill: '#d8d8d8',
         fontSize: 11,
         background: {
-          fill: '#fffaf0',
+          fill: '#191919',
           padding: [2, 4, 2, 4],
           radius: 4
         }

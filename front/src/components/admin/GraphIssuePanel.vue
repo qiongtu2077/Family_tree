@@ -44,9 +44,10 @@ defineEmits(['close', 'refresh'])
   padding: 22px;
   overflow-y: auto;
   border-radius: 24px;
-  color: #342719;
-  background: rgba(255, 250, 240, 0.98);
-  box-shadow: 0 28px 80px rgba(55, 43, 29, 0.2);
+  color: #f0f0f0;
+  background: rgba(25, 25, 25, 0.98);
+  border: 1px solid rgba(255, 250, 0, 0.22);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
 }
 
 header {
@@ -60,7 +61,7 @@ h2 {
 }
 
 p {
-  color: #846c56;
+  color: #888;
   font-size: 13px;
 }
 
@@ -68,23 +69,23 @@ button {
   border: 0;
   border-radius: 12px;
   padding: 10px 12px;
-  color: #6f4e37;
-  background: rgba(111, 78, 55, 0.1);
+  color: #fffa00;
+  background: #252525;
   cursor: pointer;
 }
 
 .refresh-btn {
   width: 100%;
   margin: 12px 0;
-  color: #fff8df;
-  background: linear-gradient(135deg, #8b5a2b, #c77935);
+  color: #101010;
+  background: linear-gradient(135deg, #fffa00 0%, #d4af37 100%);
 }
 
 .empty-state {
   padding: 20px;
   border-radius: 18px;
-  color: #6d543e;
-  background: #f4ead7;
+  color: #aaa;
+  background: #252525;
 }
 
 ul {
@@ -100,16 +101,16 @@ li {
   gap: 5px;
   padding: 14px;
   border-radius: 16px;
-  background: #fff5e2;
+  background: #252525;
 }
 
 span {
-  color: #6d543e;
+  color: #aaa;
   font-size: 13px;
 }
 
 code {
-  color: #8f4d1c;
+  color: #fffa00;
   font-size: 12px;
 }
 </style>

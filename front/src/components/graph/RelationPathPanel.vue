@@ -94,7 +94,7 @@ watch(
   z-index: 40;
   display: grid;
   place-items: center;
-  background: rgba(39, 29, 20, 0.38);
+  background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(8px);
 }
 
@@ -102,9 +102,11 @@ watch(
   width: min(680px, calc(100vw - 34px));
   padding: 26px;
   border-radius: 28px;
-  color: #342719;
-  background: #fffaf0;
-  box-shadow: 0 30px 90px rgba(55, 43, 29, 0.28);
+  color: #f0f0f0;
+  background: #191919;
+  border: 1px solid rgba(255, 250, 0, 0.28);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
+  animation: modalSlideIn 0.3s ease both;
 }
 
 header {
@@ -118,15 +120,15 @@ h2 {
 }
 
 p {
-  color: #846c56;
+  color: #888;
 }
 
 button {
   border: 0;
   border-radius: 14px;
   padding: 10px 14px;
-  color: #6f4e37;
-  background: rgba(111, 78, 55, 0.1);
+  color: #fffa00;
+  background: #252525;
   cursor: pointer;
 }
 
@@ -140,22 +142,28 @@ button {
 label {
   display: grid;
   gap: 8px;
-  color: #6d543e;
+  color: #888;
   font-size: 13px;
   font-weight: 700;
 }
 
 select {
-  border: 1px solid #dac9b6;
+  border: 1px solid #333;
   border-radius: 14px;
   padding: 12px;
-  background: #fff5e2;
+  color: #f0f0f0;
+  background: #252525;
+}
+
+select:focus {
+  border-color: #fffa00;
+  outline: none;
 }
 
 .query-btn {
   width: 100%;
-  color: #fff8df;
-  background: linear-gradient(135deg, #8b5a2b, #c77935);
+  color: #101010;
+  background: linear-gradient(135deg, #fffa00 0%, #d4af37 100%);
 }
 
 .query-btn:disabled {
@@ -167,24 +175,30 @@ select {
   margin-top: 18px;
   padding: 18px;
   border-radius: 20px;
-  background: #f4ead7;
+  border: 1px solid rgba(255, 250, 0, 0.22);
+  background: #252525;
 }
 
 .result-card span {
   display: block;
-  color: #8a735f;
+  color: #888;
   font-size: 12px;
 }
 
 .result-card strong {
   display: block;
   margin-top: 6px;
-  color: #7d3d16;
+  color: #fffa00;
   font-size: 28px;
 }
 
 .error-text {
-  color: #a8322a;
+  color: #ff7b86;
+}
+
+@keyframes modalSlideIn {
+  from { opacity: 0; transform: translateY(-24px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @media (max-width: 640px) {

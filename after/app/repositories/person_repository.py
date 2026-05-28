@@ -115,9 +115,9 @@ class PersonRepository:
         properties = _clean_properties(payload)
         query = """
         MERGE (unit:FamilyUnit {familyUnitId: $family_unit_id})
+        ON CREATE SET unit.createdAt = datetime()
         SET unit += $properties,
             unit.updatedAt = datetime()
-        ON CREATE SET unit.createdAt = datetime()
         RETURN unit
         """
         record = self.session.run(

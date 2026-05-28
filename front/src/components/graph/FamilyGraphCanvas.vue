@@ -48,9 +48,9 @@ async function ensureGraph() {
     },
     nodeStateStyles: {
       selected: {
-        stroke: '#d97706',
+        stroke: '#fffa00',
         lineWidth: 4,
-        shadowColor: 'rgba(217, 119, 6, 0.35)',
+        shadowColor: 'rgba(255, 250, 0, 0.38)',
         shadowBlur: 20
       }
     }
@@ -81,8 +81,7 @@ async function renderGraph() {
   if (!instance || props.isLoading) return
 
   const data = await layoutGraph(props.graph)
-  instance.data(data)
-  instance.render()
+  instance.changeData(data)
   instance.fitView(60)
 
   if (props.centerPersonId) {
@@ -129,6 +128,7 @@ function clearSelectedNodes() {
 function resizeGraph() {
   if (!graphInstance || !containerRef.value) return
   graphInstance.changeSize(containerRef.value.clientWidth, containerRef.value.clientHeight)
+  graphInstance.fitView(60)
 }
 
 watch(
@@ -155,16 +155,18 @@ onBeforeUnmount(() => {
   border-radius: 28px;
   overflow: hidden;
   background:
-    radial-gradient(circle at 20% 18%, rgba(199, 121, 53, 0.16), transparent 26%),
-    radial-gradient(circle at 86% 10%, rgba(76, 104, 78, 0.12), transparent 28%),
-    linear-gradient(135deg, #fff9ec 0%, #f3ead7 52%, #e8d7bd 100%);
-  box-shadow: inset 0 0 0 1px rgba(111, 78, 55, 0.12), 0 24px 70px rgba(87, 61, 34, 0.15);
+    radial-gradient(circle at 22% 18%, rgba(255, 250, 0, 0.1), transparent 28%),
+    radial-gradient(circle at 84% 12%, rgba(212, 175, 55, 0.1), transparent 30%),
+    rgba(16, 16, 16, 0.58);
+  border: 1px solid rgba(255, 250, 0, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 250, 0, 0.04), 0 24px 70px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(6px);
 }
 
 .graph-canvas {
   width: 100%;
   height: 100%;
-  min-height: 620px;
+  min-height: 0;
 }
 
 .canvas-state {
@@ -172,9 +174,9 @@ onBeforeUnmount(() => {
   inset: 0;
   display: grid;
   place-items: center;
-  color: #6d543e;
+  color: #fffa00;
   font-size: 16px;
-  background: rgba(255, 250, 240, 0.66);
+  background: rgba(16, 16, 16, 0.62);
   pointer-events: none;
   animation: statePulse 1.6s ease-in-out infinite alternate;
 }

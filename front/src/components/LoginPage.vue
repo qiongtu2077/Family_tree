@@ -1,14 +1,9 @@
 <template>
   <div class="login-container">
-    <div class="login-orb orb-one"></div>
-    <div class="login-orb orb-two"></div>
-
     <section class="login-box">
       <div class="login-header">
-        <div class="seal">谱</div>
-        <p class="eyebrow">Family Tree Atlas</p>
         <h1>族谱查询系统</h1>
-        <p>{{ isRegisterMode ? '提交注册申请，等待管理员审批' : '登录后进入家族图谱' }}</p>
+        <p>{{ isRegisterMode ? '注册新账号' : '请登录以继续' }}</p>
       </div>
 
       <div class="demo-card" v-if="!isRegisterMode">
@@ -106,90 +101,44 @@ const {
 
 <style scoped>
 .login-container {
+  width: 100%;
   min-height: 100vh;
   position: relative;
-  display: grid;
-  place-items: center;
-  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 18% 16%, rgba(184, 111, 48, 0.25), transparent 28%),
-    radial-gradient(circle at 86% 78%, rgba(57, 97, 71, 0.18), transparent 30%),
-    linear-gradient(135deg, #fff8e9 0%, #ead8ba 58%, #d6b98b 100%);
-}
-
-.login-orb {
-  position: absolute;
-  border-radius: 999px;
-  filter: blur(2px);
-  opacity: 0.75;
-  animation: drift 8s ease-in-out infinite alternate;
-}
-
-.orb-one {
-  width: 220px;
-  height: 220px;
-  top: 9%;
-  left: 7%;
-  background: rgba(139, 90, 43, 0.16);
-}
-
-.orb-two {
-  width: 300px;
-  height: 300px;
-  right: -80px;
-  bottom: 12%;
-  background: rgba(76, 104, 78, 0.16);
-  animation-delay: 1.2s;
+  background: transparent;
 }
 
 .login-box {
-  width: min(460px, calc(100vw - 36px));
+  width: min(380px, calc(100vw - 36px));
   position: relative;
   z-index: 1;
-  padding: 36px;
-  border: 1px solid rgba(111, 78, 55, 0.14);
-  border-radius: 34px;
-  background: rgba(255, 250, 240, 0.88);
-  box-shadow: 0 34px 90px rgba(78, 53, 29, 0.2);
-  backdrop-filter: blur(18px);
+  padding: 40px;
+  border: 1px solid rgba(255, 250, 0, 0.3);
+  border-radius: 16px;
+  background: rgba(25, 25, 25, 0.95);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
   animation: panelIn 0.58s cubic-bezier(.2,.8,.2,1) both;
 }
 
 .login-header {
   text-align: center;
-  margin-bottom: 22px;
-}
-
-.seal {
-  width: 58px;
-  height: 58px;
-  margin: 0 auto 12px;
-  display: grid;
-  place-items: center;
-  border-radius: 22px;
-  color: #fff8df;
-  background: linear-gradient(135deg, #6f4e37, #b36b34);
-  font-size: 30px;
-  font-weight: 900;
-  box-shadow: 0 14px 30px rgba(111, 78, 55, 0.25);
-}
-
-.eyebrow {
-  color: #9a6a3f;
-  font-size: 12px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+  margin-bottom: 30px;
 }
 
 h1 {
-  margin: 6px 0;
-  color: #342719;
-  font-size: 30px;
+  margin: 0 0 10px;
+  color: #fffa00;
+  font-size: 28px;
+  letter-spacing: 0.04em;
 }
 
 .login-header p:last-child {
-  color: #7d6752;
+  color: #888;
 }
 
 .demo-card,
@@ -202,8 +151,9 @@ h1 {
 }
 
 .demo-card {
-  color: #60462e;
-  background: rgba(139, 90, 43, 0.09);
+  color: #cfcfcf;
+  border: 1px solid rgba(255, 250, 0, 0.16);
+  background: rgba(255, 250, 0, 0.08);
 }
 
 .demo-card span {
@@ -211,8 +161,9 @@ h1 {
 }
 
 .auth-error {
-  color: #8d241f;
-  background: #fff0ea;
+  color: #ff7b86;
+  border: 1px solid rgba(255, 71, 87, 0.28);
+  background: rgba(255, 71, 87, 0.1);
 }
 
 .login-form {
@@ -223,23 +174,29 @@ h1 {
 label {
   display: grid;
   gap: 8px;
-  color: #5e4631;
+  color: #888;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 input {
   width: 100%;
-  border: 1px solid #dac9b6;
-  border-radius: 15px;
+  border: 1px solid #333;
+  border-radius: 8px;
   padding: 12px 14px;
-  color: #342719;
-  background: #fffaf0;
+  color: #f0f0f0;
+  background: #1a1a1a;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 input:focus {
-  border-color: #a45f2c;
-  outline: 4px solid rgba(164, 95, 44, 0.14);
+  border-color: #fffa00;
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(255, 250, 0, 0.1);
+}
+
+input::placeholder {
+  color: #666;
 }
 
 .password-field {
@@ -252,23 +209,27 @@ input:focus {
 .link-btn,
 .login-btn {
   border: 0;
-  border-radius: 15px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
 .password-field button {
   padding: 0 13px;
-  color: #6f4e37;
-  background: rgba(111, 78, 55, 0.1);
+  color: #fffa00;
+  background: #252525;
 }
 
 .login-btn {
-  margin-top: 4px;
-  padding: 14px;
-  color: #fff8df;
-  background: linear-gradient(135deg, #8b5a2b, #c77935);
-  font-weight: 800;
-  box-shadow: 0 14px 30px rgba(139, 90, 43, 0.24);
+  margin-top: 8px;
+  padding: 13px;
+  color: #101010;
+  background: linear-gradient(135deg, #fffa00 0%, #d4af37 100%);
+  font-weight: 700;
+  box-shadow: 0 8px 25px rgba(255, 250, 0, 0.3);
+}
+
+.login-btn:hover:not(:disabled) {
+  box-shadow: 0 10px 30px rgba(255, 250, 0, 0.42);
 }
 
 .login-btn:disabled {
@@ -278,7 +239,7 @@ input:focus {
 
 .link-btn {
   padding: 10px;
-  color: #6f4e37;
+  color: #fffa00;
   background: transparent;
 }
 
@@ -287,8 +248,9 @@ input:focus {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-@keyframes drift {
-  from { transform: translate3d(0, 0, 0); }
-  to { transform: translate3d(18px, -16px, 0); }
+@media (max-width: 480px) {
+  .login-box {
+    padding: 30px 24px;
+  }
 }
 </style>

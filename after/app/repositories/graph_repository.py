@@ -19,54 +19,29 @@ class GraphRepository:
     def get_focus_graph(self, person_id: str, generations: int) -> dict[str, Any] | None:
         """读取中心人物谱系图所需的人物、家庭单元和关系。"""
         depth = _safe_depth(generations)
-        query = f"""
-        MATCH (center:Person {{personId: $person_id}})
-        CALL {{
-          WITH center
-          MATCH path=(ancestor:Person)-[:PARENT_OF*0..{depth}]->(center)
-          UNWIND nodes(path) AS person
-          RETURN collect(DISTINCT person) AS ancestor_people
-        }}
-        CALL {{
-          WITH center
-          MATCH path=(center)-[:PARENT_OF*0..{depth}]->(descendant:Person)
-          UNWIND nodes(path) AS person
-          RETURN collect(DISTINCT person) AS descendant_people
-        }}
-        WITH center, ancestor_people + descendant_people AS scoped_people
-        UNWIND scoped_people AS scoped_person
-        WITH center, collect(DISTINCT scoped_person) AS people
-        OPTIONAL MATCH (parent:Person)-[:PARENT_OF]->(center)
-        WITH center, people, collect(DISTINCT parent) AS parents
-        OPTIONAL MATCH (sibling:Person)<-[:PARENT_OF]-(p:Person)
-        WHERE p IN parents AND sibling <> center
-        WITH people + collect(DISTINCT sibling) AS raw_people
-        UNWIND raw_people AS person
-        WITH collect(DISTINCT person) AS people
-        OPTIONAL MATCH (person:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE person IN people
-        OPTIONAL MATCH (partner:Person)-[:PARTNER_IN]->(unit)
-        WITH people + collect(DISTINCT partner) AS raw_people, collect(DISTINCT unit) AS units
-        UNWIND raw_people AS final_person
-        WITH collect(DISTINCT final_person) AS people, units
-        OPTIONAL MATCH (p:Person)-[partner_rel:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE p IN people AND unit IN units
-        OPTIONAL MATCH (unit)-[child_rel:HAS_CHILD]->(child:Person)
-        WHERE unit IN units AND child IN people
-        OPTIONAL MATCH (parent:Person)-[parent_rel:PARENT_OF]->(child2:Person)
-        WHERE parent IN people AND child2 IN people
-        OPTIONAL MATCH (left:Person)-[spouse_rel:SPOUSE_OF]-(right:Person)
-        WHERE left IN people AND right IN people
-        RETURN
-          people AS persons,
-          units AS family_units,
-          collect(DISTINCT partner_rel) AS partner_edges,
-          collect(DISTINCT child_rel) AS child_edges,
-          collect(DISTINCT parent_rel) AS parent_edges,
-          collect(DISTINCT spouse_rel) AS spouse_edges
-        """
-        record = self.session.run(query, person_id=str(person_id)).single()
-        return _record_to_dict(record) if record else None
+        center = self._get_person_node(person_id)
+        if not center:
+            return None
+
+        persons = [center]
+        persons.extend(self._get_related_people(person_id, "ancestors", depth))
+        persons.extend(self._get_related_people(person_id, "descendants", depth))
+        persons.extend(self._get_siblings(person_id))
+        person_ids = _unique_ids([dict(person).get("personId") for person in persons])
+
+        family_units = self._get_family_units_for_people(person_ids)
+        family_unit_ids = _unique_ids([dict(unit).get("familyUnitId") for unit in family_units])
+        partners = self._get_partners_for_family_units(family_unit_ids)
+        persons.extend(partners)
+        person_ids = [dict(person).get("personId") for person in persons]
+        person_ids = _unique_ids(person_ids)
+        persons = self._get_people_by_ids(person_ids)
+        edges = self._get_edges_for_scope(person_ids, family_unit_ids)
+        return {
+            "persons": persons,
+            "family_units": family_units,
+            **edges,
+        }
 
     def get_branch_graph(self, family_unit_id: str, depth: int) -> dict[str, Any] | None:
         """读取某个家庭单元向下展开的后代分支图。"""
@@ -143,6 +118,127 @@ class GraphRepository:
         """
         return [_record_to_dict(record) for record in self.session.run(query)]
 
+    def _get_person_node(self, person_id: str):
+        """读取单个人物节点。"""
+        record = self.session.run(
+            "MATCH (person:Person {personId: $person_id}) RETURN person",
+            person_id=str(person_id),
+        ).single()
+        return record["person"] if record else None
+
+    def _get_related_people(self, person_id: str, direction: str, depth: int) -> list[Any]:
+        """按方向读取祖先或后代人物。"""
+        if direction == "ancestors":
+            query = f"""
+            MATCH path=(person:Person)-[:PARENT_OF*1..{depth}]->(:Person {{personId: $person_id}})
+            UNWIND nodes(path) AS related
+            RETURN DISTINCT related AS person
+            """
+        else:
+            query = f"""
+            MATCH path=(:Person {{personId: $person_id}})-[:PARENT_OF*1..{depth}]->(person:Person)
+            UNWIND nodes(path) AS related
+            RETURN DISTINCT related AS person
+            """
+        return [record["person"] for record in self.session.run(query, person_id=str(person_id))]
+
+    def _get_siblings(self, person_id: str) -> list[Any]:
+        """读取中心人物兄弟姐妹。"""
+        query = """
+        MATCH (center:Person {personId: $person_id})<-[:PARENT_OF]-(parent:Person)-[:PARENT_OF]->(sibling:Person)
+        WHERE sibling <> center
+        RETURN DISTINCT sibling AS person
+        """
+        return [record["person"] for record in self.session.run(query, person_id=str(person_id))]
+
+    def _get_family_units_for_people(self, person_ids: list[str]) -> list[Any]:
+        """读取人物所属家庭单元。"""
+        query = """
+        MATCH (person:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
+        WHERE person.personId IN $person_ids
+        RETURN DISTINCT unit
+        """
+        return [record["unit"] for record in self.session.run(query, person_ids=person_ids)]
+
+    def _get_partners_for_family_units(self, family_unit_ids: list[str]) -> list[Any]:
+        """读取家庭单元中的伴侣人物。"""
+        query = """
+        MATCH (partner:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
+        WHERE unit.familyUnitId IN $family_unit_ids
+        RETURN DISTINCT partner AS person
+        """
+        return [
+            record["person"]
+            for record in self.session.run(query, family_unit_ids=family_unit_ids)
+        ]
+
+    def _get_people_by_ids(self, person_ids: list[str]) -> list[Any]:
+        """按 ID 列表重新读取去重后的人物节点。"""
+        query = """
+        MATCH (person:Person)
+        WHERE person.personId IN $person_ids
+        RETURN person
+        ORDER BY person.birthDate, person.name
+        """
+        return [record["person"] for record in self.session.run(query, person_ids=person_ids)]
+
+    def _get_edges_for_scope(
+        self,
+        person_ids: list[str],
+        family_unit_ids: list[str],
+    ) -> dict[str, list[Any]]:
+        """按人物和家庭单元范围读取边，避免复杂聚合查询卡顿。"""
+        params = {"person_ids": person_ids, "family_unit_ids": family_unit_ids}
+        partner_edges = self._collect_relationships(
+            """
+            MATCH (p:Person)-[rel:PARTNER_IN]->(unit:FamilyUnit)
+            WHERE p.personId IN $person_ids AND unit.familyUnitId IN $family_unit_ids
+            RETURN p AS source, rel, unit AS target
+            """,
+            params,
+        )
+        child_edges = self._collect_relationships(
+            """
+            MATCH (unit:FamilyUnit)-[rel:HAS_CHILD]->(child:Person)
+            WHERE unit.familyUnitId IN $family_unit_ids AND child.personId IN $person_ids
+            RETURN unit AS source, rel, child AS target
+            """,
+            params,
+        )
+        parent_edges = self._collect_relationships(
+            """
+            MATCH (parent:Person)-[rel:PARENT_OF]->(child:Person)
+            WHERE parent.personId IN $person_ids AND child.personId IN $person_ids
+            RETURN parent AS source, rel, child AS target
+            """,
+            params,
+        )
+        spouse_edges = self._collect_relationships(
+            """
+            MATCH (left:Person)-[rel:SPOUSE_OF]-(right:Person)
+            WHERE left.personId IN $person_ids AND right.personId IN $person_ids
+            RETURN left AS source, rel, right AS target
+            """,
+            params,
+        )
+        return {
+            "partner_edges": partner_edges,
+            "child_edges": child_edges,
+            "parent_edges": parent_edges,
+            "spouse_edges": spouse_edges,
+        }
+
+    def _collect_relationships(self, query: str, params: dict[str, Any]) -> list[Any]:
+        """执行边查询并返回关系列表。"""
+        return [
+            {
+                "source": record["source"],
+                "relationship": record["rel"],
+                "target": record["target"],
+            }
+            for record in self.session.run(query, **params)
+        ]
+
 
 def _safe_depth(depth: int) -> int:
     """把查询深度限制在安全范围内。"""
@@ -152,3 +248,14 @@ def _safe_depth(depth: int) -> int:
 def _record_to_dict(record) -> dict[str, Any]:
     """把 Neo4j Record 转成普通字典。"""
     return {key: record[key] for key in record.keys()}
+
+
+def _unique_ids(values: list[str]) -> list[str]:
+    """保留顺序去重 ID 列表。"""
+    seen = set()
+    result = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result

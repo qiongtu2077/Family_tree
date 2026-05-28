@@ -77,8 +77,8 @@ class GraphViewService:
             raw_graph.get("parent_edges", []),
             raw_graph.get("spouse_edges", []),
         ):
-            for relationship in rel_group:
-                edge = _to_graph_edge(relationship)
+            for edge_record in rel_group:
+                edge = _to_graph_edge(edge_record)
                 if edge and edge.id not in seen_edges:
                     edges.append(edge)
                     seen_edges.add(edge.id)
@@ -128,15 +128,18 @@ def _to_family_unit_node(node) -> GraphFamilyUnit:
     )
 
 
-def _to_graph_edge(relationship) -> GraphEdge | None:
+def _to_graph_edge(edge_record) -> GraphEdge | None:
     """把 Neo4j Relationship 转换为前端连线。"""
+    relationship = edge_record.get("relationship") if isinstance(edge_record, dict) else edge_record
     if relationship is None:
         return None
 
     relation_type = relationship.type
     properties = dict(relationship)
-    source_id = _endpoint_id(relationship.start_node)
-    target_id = _endpoint_id(relationship.end_node)
+    source_node = edge_record.get("source") if isinstance(edge_record, dict) else relationship.start_node
+    target_node = edge_record.get("target") if isinstance(edge_record, dict) else relationship.end_node
+    source_id = _endpoint_id(source_node)
+    target_id = _endpoint_id(target_node)
 
     if relation_type == "PARTNER_IN":
         relation = "partner"
@@ -172,8 +175,10 @@ def _to_graph_edge(relationship) -> GraphEdge | None:
 
 def _endpoint_id(node) -> str:
     """根据节点标签生成前端节点 ID。"""
+    if node is None:
+        return ""
     data = dict(node)
-    labels = set(node.labels)
+    labels = set(getattr(node, "labels", []))
     if "FamilyUnit" in labels:
         return f"family:{data.get('familyUnitId') or data.get('id')}"
     return str(data.get("personId") or data.get("id"))

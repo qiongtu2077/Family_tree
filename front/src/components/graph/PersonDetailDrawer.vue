@@ -68,10 +68,11 @@ const lifeYears = computed(() => {
   width: 360px;
   padding: 24px;
   overflow-y: auto;
-  color: #342719;
-  background: rgba(255, 250, 240, 0.96);
-  border-left: 1px solid rgba(111, 78, 55, 0.14);
-  box-shadow: -18px 0 50px rgba(55, 43, 29, 0.09);
+  color: #f0f0f0;
+  background: rgba(25, 25, 25, 0.96);
+  border-left: 1px solid rgba(255, 250, 0, 0.18);
+  box-shadow: -18px 0 50px rgba(0, 0, 0, 0.28);
+  animation: drawerIn 0.24s ease both;
 }
 
 .close-btn {
@@ -79,8 +80,8 @@ const lifeYears = computed(() => {
   border: 0;
   border-radius: 999px;
   padding: 8px 12px;
-  color: #6f4e37;
-  background: rgba(111, 78, 55, 0.1);
+  color: #101010;
+  background: linear-gradient(135deg, #fffa00 0%, #d4af37 100%);
   cursor: pointer;
 }
 
@@ -118,7 +119,7 @@ h2 {
 
 .meta {
   margin-top: 6px;
-  color: #8a735f;
+  color: #888;
 }
 
 section {
@@ -131,7 +132,7 @@ h3 {
 }
 
 section p {
-  color: #6d543e;
+  color: #aaa;
   line-height: 1.8;
 }
 
@@ -143,13 +144,14 @@ section p {
 .info-grid div {
   padding: 13px;
   border-radius: 16px;
-  background: #fff5e2;
+  border: 1px solid rgba(255, 250, 0, 0.12);
+  background: #252525;
 }
 
 .info-grid span {
   display: block;
   margin-bottom: 5px;
-  color: #9a8068;
+  color: #888;
   font-size: 12px;
 }
 
@@ -169,8 +171,21 @@ section p {
   border: 0;
   border-radius: 14px;
   padding: 12px;
-  color: #fff8df;
-  background: linear-gradient(135deg, #8b5a2b, #c77935);
+  color: #101010;
+  background: linear-gradient(135deg, #fffa00 0%, #d4af37 100%);
   cursor: pointer;
+}
+
+@keyframes drawerIn {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (max-width: 1040px) {
+  .detail-drawer {
+    width: 100%;
+    border-left: 0;
+    border-top: 1px solid rgba(255, 250, 0, 0.18);
+  }
 }
 </style>

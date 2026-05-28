@@ -181,18 +181,17 @@ function normalizePersonId(personId) {
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto 1fr;
-  background:
-    linear-gradient(120deg, rgba(105, 70, 39, 0.09), transparent 34%),
-    repeating-linear-gradient(90deg, rgba(111, 78, 55, 0.035) 0 1px, transparent 1px 52px),
-    #f8f0e2;
+  background: transparent;
 }
 
 .workspace {
   min-height: 0;
+  height: calc(100vh - 67px);
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr) auto;
   gap: 18px;
   padding: 18px;
+  overflow: hidden;
 }
 
 .left-rail {
@@ -207,14 +206,16 @@ function normalizePersonId(personId) {
 .search-results {
   padding: 18px;
   border-radius: 22px;
-  color: #342719;
-  background: rgba(255, 250, 240, 0.9);
-  box-shadow: 0 16px 40px rgba(87, 61, 34, 0.08);
+  color: #f0f0f0;
+  background: rgba(25, 25, 25, 0.92);
+  border: 1px solid rgba(255, 250, 0, 0.14);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(10px);
   animation: cardRise 0.5s ease both;
 }
 
 .status-card span {
-  color: #9a8068;
+  color: #888;
   font-size: 12px;
 }
 
@@ -226,13 +227,14 @@ function normalizePersonId(personId) {
 
 .status-card p,
 .warning-card p {
-  color: #725940;
+  color: #aaa;
   line-height: 1.7;
 }
 
 .error-card {
-  color: #9b2c2c;
-  background: #fff0ec;
+  color: #ff7b86;
+  border-color: rgba(255, 71, 87, 0.28);
+  background: rgba(255, 71, 87, 0.1);
 }
 
 .search-results {
@@ -249,16 +251,21 @@ function normalizePersonId(personId) {
 .search-results button {
   display: flex;
   justify-content: space-between;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 14px;
   padding: 11px 12px;
-  color: #463422;
-  background: #fff5e2;
+  color: #f0f0f0;
+  background: #252525;
   cursor: pointer;
 }
 
+.search-results button:hover {
+  border-color: rgba(255, 250, 0, 0.38);
+  background: rgba(255, 250, 0, 0.1);
+}
+
 .search-results small {
-  color: #9a8068;
+  color: #888;
 }
 
 .canvas-area {
@@ -279,6 +286,9 @@ function normalizePersonId(personId) {
 @media (max-width: 1040px) {
   .workspace {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: calc(100vh - 67px);
+    overflow: visible;
   }
 
   .left-rail {

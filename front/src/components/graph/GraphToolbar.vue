@@ -1,7 +1,6 @@
 <template>
   <header class="graph-toolbar">
     <div class="brand-area">
-      <div class="brand-mark">谱</div>
       <div>
         <h1>族谱系统</h1>
         <p>主线、姻亲、路径与分支视图</p>
@@ -72,11 +71,12 @@ const views = [
   grid-template-columns: auto minmax(260px, 420px) 1fr auto;
   align-items: center;
   gap: 18px;
-  padding: 16px 22px;
-  background: rgba(255, 252, 240, 0.94);
-  border-bottom: 1px solid rgba(84, 57, 23, 0.12);
-  box-shadow: 0 12px 40px rgba(55, 43, 29, 0.08);
-  backdrop-filter: blur(18px);
+  padding: 10px 20px;
+  color: #f0f0f0;
+  background: linear-gradient(135deg, rgba(26, 26, 26, 0.96) 0%, rgba(37, 37, 37, 0.96) 100%);
+  border-bottom: 1px solid rgba(255, 250, 0, 0.18);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
   animation: toolbarDrop 0.48s ease both;
 }
 
@@ -86,29 +86,16 @@ const views = [
   gap: 12px;
 }
 
-.brand-mark {
-  width: 46px;
-  height: 46px;
-  border-radius: 18px;
-  display: grid;
-  place-items: center;
-  color: #fff8df;
-  background: linear-gradient(135deg, #6f4e37, #b36b34);
-  font-size: 23px;
-  font-weight: 800;
-  box-shadow: 0 10px 22px rgba(111, 78, 55, 0.22);
-}
-
 h1 {
   margin: 0;
-  color: #33261c;
+  color: #fffa00;
   font-size: 20px;
-  letter-spacing: 0.04em;
+  font-weight: 600;
 }
 
 p {
   margin: 3px 0 0;
-  color: #8a735f;
+  color: #888;
   font-size: 12px;
 }
 
@@ -119,16 +106,20 @@ p {
 
 .search-area input {
   width: 100%;
-  border: 1px solid #dac9b6;
+  border: 1px solid #333;
   border-radius: 999px;
   padding: 11px 16px;
-  color: #342719;
-  background: #fffaf0;
+  color: #f0f0f0;
+  background: #1a1a1a;
 }
 
 .search-area input:focus {
-  border-color: #a45f2c;
-  outline: 3px solid rgba(164, 95, 44, 0.14);
+  border-color: #fffa00;
+  outline: 3px solid rgba(255, 250, 0, 0.1);
+}
+
+.search-area input::placeholder {
+  color: #666;
 }
 
 .view-tabs {
@@ -144,17 +135,17 @@ p {
   border: 0;
   border-radius: 999px;
   padding: 10px 15px;
-  color: #624832;
-  background: rgba(111, 78, 55, 0.1);
+  color: #d8d8d8;
+  background: #252525;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .view-tabs button.active,
 .primary-btn {
-  color: #fff8df;
-  background: linear-gradient(135deg, #8b5a2b, #c77935);
-  box-shadow: 0 10px 20px rgba(139, 90, 43, 0.18);
+  color: #101010;
+  background: linear-gradient(135deg, #fffa00 0%, #d4af37 100%);
+  box-shadow: 0 6px 18px rgba(255, 250, 0, 0.25);
 }
 
 .toolbar-actions {
@@ -163,8 +154,8 @@ p {
 }
 
 .toolbar-actions .ghost-btn {
-  color: #7d2f22;
-  background: rgba(125, 47, 34, 0.09);
+  color: #ff7b86;
+  background: rgba(255, 71, 87, 0.1);
 }
 
 @media (max-width: 1120px) {

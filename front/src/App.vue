@@ -24,6 +24,7 @@ import { onMounted } from 'vue'
 import LoginPage from './components/LoginPage.vue'
 import FamilyGraphView from './views/FamilyGraphView.vue'
 import { useAuth } from './composables/useAuth'
+import { useWaveBackground } from './composables/useWaveBackground'
 
 const {
   isLoggedIn,
@@ -33,6 +34,8 @@ const {
   handleLogout,
   checkLoginStatus
 } = useAuth()
+
+useWaveBackground()
 
 onMounted(() => {
   checkLoginStatus()
@@ -44,9 +47,7 @@ onMounted(() => {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background:
-    radial-gradient(circle at 30% 20%, rgba(199, 121, 53, 0.18), transparent 30%),
-    linear-gradient(135deg, #fff8e9, #ead9be);
+  background: transparent;
 }
 
 .loading-card {
@@ -54,9 +55,10 @@ onMounted(() => {
   padding: 34px;
   border-radius: 28px;
   text-align: center;
-  color: #3d2d1f;
-  background: rgba(255, 250, 240, 0.92);
-  box-shadow: 0 30px 80px rgba(87, 61, 34, 0.18);
+  color: #f0f0f0;
+  background: rgba(25, 25, 25, 0.94);
+  border: 1px solid rgba(255, 250, 0, 0.24);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   animation: floatIn 0.5s ease both;
 }
 
@@ -65,8 +67,8 @@ onMounted(() => {
   height: 42px;
   margin: 0 auto 16px;
   display: block;
-  border: 4px solid rgba(139, 90, 43, 0.18);
-  border-top-color: #8b5a2b;
+  border: 4px solid rgba(255, 250, 0, 0.18);
+  border-top-color: #fffa00;
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
@@ -78,7 +80,7 @@ onMounted(() => {
 
 .loading-card p {
   margin-top: 8px;
-  color: #7b634d;
+  color: #888;
 }
 
 @keyframes spin {
