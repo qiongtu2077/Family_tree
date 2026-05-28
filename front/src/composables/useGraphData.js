@@ -35,8 +35,13 @@ export function useGraphData() {
    * 加载人物列表。
    */
   async function loadPeople() {
-    people.value = await getPersons(0, 1000)
-    return people.value
+    try {
+      people.value = await getPersons(0, 1000)
+      return people.value
+    } catch (error) {
+      errorMessage.value = extractErrorMessage(error)
+      throw error
+    }
   }
 
   /**
@@ -59,7 +64,7 @@ export function useGraphData() {
       centerPersonId.value = data.center_person_id || fallbackCenterPersonId
       return data
     } catch (error) {
-      errorMessage.value = error.response?.data?.detail || error.message
+      errorMessage.value = extractErrorMessage(error)
       throw error
     } finally {
       isLoading.value = false
@@ -161,4 +166,11 @@ export function useGraphData() {
  */
 function stripFamilyPrefix(familyUnitId) {
   return String(familyUnitId || '').replace(/^family:/, '')
+}
+
+/**
+ * 提取接口错误信息。
+ */
+function extractErrorMessage(error) {
+  return error.response?.data?.detail || error.message || '接口请求失败'
 }

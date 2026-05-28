@@ -167,15 +167,20 @@ async function openAdminPanel() {
  * 进入页面时加载默认图谱。
  */
 onMounted(async () => {
-  const people = await data.loadPeople()
+  let people = []
+  try {
+    people = await data.loadPeople()
+  } catch {
+    people = []
+  }
   const demoPerson = people.find(person => person.id === 'demo:child')
   const defaultPersonId = normalizePersonId(props.currentUser?.person_id) || demoPerson?.id || people[0]?.id || ''
-  if (!defaultPersonId) return
+  const fallbackPersonId = defaultPersonId || 'demo:child'
 
   try {
-    await data.loadMainlineGraph(defaultPersonId)
+    await data.loadMainlineGraph(fallbackPersonId)
   } catch {
-    if (people[0]?.id && people[0].id !== defaultPersonId) {
+    if (people[0]?.id && people[0].id !== fallbackPersonId) {
       await data.loadMainlineGraph(people[0].id)
     }
   }
