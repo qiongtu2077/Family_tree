@@ -27,6 +27,57 @@ def get_focus_graph(
     return graph
 
 
+@router.get("/mainline/{person_id}", response_model=GraphViewResponse)
+def get_mainline_graph(
+    person_id: str,
+    ancestor_depth: int = Query(3, ge=1, le=10, description="向上追溯代数"),
+    descendant_depth: int = Query(3, ge=1, le=10, description="向下展开代数"),
+    session=Depends(get_neo4j_session),
+):
+    """获取本家主线图。"""
+    service = GraphViewService(GraphRepository(session))
+    graph = service.get_mainline_graph(person_id, ancestor_depth, descendant_depth)
+    if not graph:
+        raise HTTPException(status_code=404, detail="中心人物不存在或没有可展示图谱")
+    return graph
+
+
+@router.get("/inlaw/{person_id}/{spouse_id}", response_model=GraphViewResponse)
+def get_inlaw_graph(
+    person_id: str,
+    spouse_id: str,
+    depth: int = Query(3, ge=1, le=10, description="配偶原生家族追溯深度"),
+    session=Depends(get_neo4j_session),
+):
+    """获取姻亲谱系图。"""
+    service = GraphViewService(GraphRepository(session))
+    graph = service.get_inlaw_graph(person_id, spouse_id, depth)
+    if not graph:
+        raise HTTPException(status_code=404, detail="两人不是配偶关系或姻亲谱系不可展示")
+    return graph
+
+
+@router.get("/bridge", response_model=GraphViewResponse)
+def get_bridge_graph(
+    person_id: str = Query(..., description="本家人物 ID"),
+    spouse_id: str = Query(..., description="配偶人物 ID"),
+    family_unit_id: str | None = Query(None, description="可选家庭单元 ID"),
+    depth: int = Query(2, ge=1, le=6, description="两侧近亲展开深度"),
+    session=Depends(get_neo4j_session),
+):
+    """获取联姻桥接图。"""
+    service = GraphViewService(GraphRepository(session))
+    graph = service.get_bridge_graph(
+        person_id,
+        spouse_id,
+        depth,
+        family_unit_id=family_unit_id,
+    )
+    if not graph:
+        raise HTTPException(status_code=404, detail="未找到可桥接的配偶或伴侣家庭单元")
+    return graph
+
+
 @router.get("/branch/{family_unit_id}", response_model=GraphViewResponse)
 def get_branch_graph(
     family_unit_id: str,
@@ -38,6 +89,35 @@ def get_branch_graph(
     graph = service.get_branch_graph(family_unit_id, depth)
     if not graph:
         raise HTTPException(status_code=404, detail="家庭单元不存在或没有可展示分支")
+    return graph
+
+
+@router.get("/branch", response_model=GraphViewResponse)
+def get_branch_graph_by_root(
+    root_type: str = Query("person", pattern="^(person|familyUnit)$", description="根节点类型"),
+    root_id: str = Query(..., description="人物或家庭单元 ID"),
+    depth: int = Query(5, ge=1, le=10, description="向下展开深度"),
+    session=Depends(get_neo4j_session),
+):
+    """按人物或家庭单元获取后代分支图。"""
+    service = GraphViewService(GraphRepository(session))
+    graph = service.get_branch_graph_by_root(root_type, root_id, depth)
+    if not graph:
+        raise HTTPException(status_code=404, detail="根节点不存在或没有可展示分支")
+    return graph
+
+
+@router.get("/overview", response_model=GraphViewResponse)
+def get_overview_graph(
+    scope: str = Query("all", description="all、demo 或 familyUnitId"),
+    max_nodes: int = Query(300, ge=1, le=1000, description="最大人物节点数"),
+    session=Depends(get_neo4j_session),
+):
+    """获取家族全景图。"""
+    service = GraphViewService(GraphRepository(session))
+    graph = service.get_overview_graph(scope, max_nodes)
+    if not graph:
+        raise HTTPException(status_code=404, detail="当前范围没有可展示图谱")
     return graph
 
 

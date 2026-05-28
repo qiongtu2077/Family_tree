@@ -3,6 +3,7 @@
  * 把后端图数据库结构投影为传统家谱树视图。
  */
 const PERSON_SIZE = { width: 118, height: 46 }
+const OVERVIEW_PERSON_SIZE = { width: 96, height: 38 }
 const PARTNER_GAP = 96
 const SIBLING_GAP = 76
 const FAMILY_GAP = 138
@@ -25,7 +26,9 @@ const GRAPH_STYLE = {
  */
 export async function layoutGraph(graph) {
   const model = buildFamilyModel(graph)
-  const layout = createLayout(model)
+  const layout = graph.view_mode === 'overview'
+    ? layoutOverview(model)
+    : layoutGenealogy(model, graph.view_mode)
   return {
     nodes: layout.nodes,
     edges: layout.edges
@@ -189,9 +192,9 @@ function pushToMap(map, key, value) {
 // --- 家谱布局 --- //
 
 /**
- * 创建完整 G6 布局数据。
+ * 创建正式家谱布局数据。
  */
-function createLayout(model) {
+function layoutGenealogy(model) {
   const state = createLayoutState(model)
   const roots = findRootFamilies(model)
   let cursor = 0
@@ -203,6 +206,32 @@ function createLayout(model) {
   })
 
   layoutRemainingPersons(state, cursor)
+  return {
+    nodes: state.nodes,
+    edges: state.edges
+  }
+}
+
+/**
+ * 创建家族全景布局数据。
+ */
+function layoutOverview(model) {
+  const state = createLayoutState(model)
+  const components = findConnectedComponents(model)
+  const columns = Math.max(1, Math.ceil(Math.sqrt(components.length || 1)))
+  const clusterWidth = 760
+  const clusterHeight = 520
+
+  components.forEach((component, index) => {
+    const origin = {
+      x: (index % columns) * clusterWidth,
+      y: Math.floor(index / columns) * clusterHeight
+    }
+    layoutOverviewComponent(state, component, origin)
+  })
+
+  layoutOverviewRemainingPersons(state, components.length, columns, clusterWidth, clusterHeight)
+  addOverviewEdges(state)
   return {
     nodes: state.nodes,
     edges: state.edges
@@ -245,6 +274,218 @@ function layoutRemainingPersons(state, startX) {
     placePerson(state, person.id, cursor + PERSON_SIZE.width / 2, TOP_PADDING)
     cursor += PERSON_SIZE.width + SIBLING_GAP
   })
+}
+
+// --- 全景布局 --- //
+
+/**
+ * 查找全景图中的连通分量。
+ */
+function findConnectedComponents(model) {
+  const adjacency = new Map(model.persons.map(person => [person.id, new Set()]))
+  model.familyMap.forEach(family => {
+    const members = [...family.partners, ...family.children].filter(id => adjacency.has(id))
+    members.forEach(source => {
+      members.forEach(target => {
+        if (source !== target) adjacency.get(source).add(target)
+      })
+    })
+  })
+
+  const visited = new Set()
+  const components = []
+  model.persons.forEach(person => {
+    if (visited.has(person.id)) return
+    const queue = [person.id]
+    const ids = []
+    visited.add(person.id)
+    while (queue.length) {
+      const id = queue.shift()
+      ids.push(id)
+      adjacency.get(id)?.forEach(nextId => {
+        if (visited.has(nextId)) return
+        visited.add(nextId)
+        queue.push(nextId)
+      })
+    }
+    components.push(ids.sort((a, b) => comparePersons(model.personMap.get(a), model.personMap.get(b))))
+  })
+
+  return components.sort((a, b) => b.length - a.length || a[0].localeCompare(b[0]))
+}
+
+/**
+ * 布局单个全景分量。
+ */
+function layoutOverviewComponent(state, personIds, origin) {
+  const generations = assignOverviewGenerations(state, personIds)
+  const grouped = groupByGeneration(personIds, generations)
+  const rowGap = 104
+  const colGap = 136
+  let rowIndex = 0
+
+  ;[...grouped.keys()].sort((a, b) => a - b).forEach(generation => {
+    const ids = grouped.get(generation).sort((a, b) => (
+      comparePersons(state.personMap.get(a), state.personMap.get(b))
+    ))
+    const totalWidth = (ids.length - 1) * colGap
+    ids.forEach((personId, index) => {
+      placeOverviewPerson(
+        state,
+        personId,
+        origin.x + totalWidth / -2 + index * colGap,
+        origin.y + rowIndex * rowGap
+      )
+    })
+    rowIndex += 1
+  })
+}
+
+/**
+ * 给全景分量估算代际层级。
+ */
+function assignOverviewGenerations(state, personIds) {
+  const idSet = new Set(personIds)
+  const childToParents = new Map()
+  const parentToChildren = new Map()
+  state.familyMap.forEach(family => {
+    const partners = family.partners.filter(id => idSet.has(id))
+    const children = family.children.filter(id => idSet.has(id))
+    children.forEach(childId => {
+      partners.forEach(parentId => {
+        pushToMap(childToParents, childId, parentId)
+        pushToMap(parentToChildren, parentId, childId)
+      })
+    })
+  })
+
+  const roots = personIds.filter(personId => !childToParents.has(personId))
+  const queue = (roots.length ? roots : [personIds[0]]).map(personId => ({ personId, generation: 0 }))
+  const generations = new Map()
+  while (queue.length) {
+    const { personId, generation } = queue.shift()
+    if (generations.has(personId) && generations.get(personId) <= generation) continue
+    generations.set(personId, generation)
+    ;(parentToChildren.get(personId) || []).forEach(childId => {
+      queue.push({ personId: childId, generation: generation + 1 })
+    })
+  }
+
+  personIds.forEach(personId => {
+    if (!generations.has(personId)) generations.set(personId, 0)
+  })
+  return generations
+}
+
+/**
+ * 按代际分组人物。
+ */
+function groupByGeneration(personIds, generations) {
+  const grouped = new Map()
+  personIds.forEach(personId => {
+    const generation = generations.get(personId) || 0
+    if (!grouped.has(generation)) grouped.set(generation, [])
+    grouped.get(generation).push(personId)
+  })
+  return grouped
+}
+
+/**
+ * 布局全景中未进入连通分量的人物。
+ */
+function layoutOverviewRemainingPersons(state, componentCount, columns, clusterWidth, clusterHeight) {
+  const startIndex = componentCount
+  let cursor = 0
+  state.persons.forEach(person => {
+    if (state.placedPersons.has(person.id)) return
+    const index = startIndex + cursor
+    placeOverviewPerson(
+      state,
+      person.id,
+      (index % columns) * clusterWidth,
+      Math.floor(index / columns) * clusterHeight
+    )
+    cursor += 1
+  })
+}
+
+/**
+ * 放置全景人物节点。
+ */
+function placeOverviewPerson(state, personId, x, y) {
+  if (state.positions.has(personId)) return state.positions.get(personId)
+
+  const person = state.personMap.get(personId)
+  if (!person) return null
+
+  const position = { x, y }
+  state.positions.set(personId, position)
+  state.placedPersons.add(personId)
+  state.nodes.push(toPersonNode(person, position, OVERVIEW_PERSON_SIZE))
+  return position
+}
+
+/**
+ * 生成全景关系线。
+ */
+function addOverviewEdges(state) {
+  state.familyMap.forEach(family => {
+    addOverviewSpouseEdges(state, family)
+    addOverviewChildEdges(state, family)
+  })
+}
+
+/**
+ * 生成全景配偶线。
+ */
+function addOverviewSpouseEdges(state, family) {
+  if (family.partners.length < 2) return
+  for (let index = 0; index < family.partners.length - 1; index += 1) {
+    const source = family.partners[index]
+    const target = family.partners[index + 1]
+    if (!state.positions.has(source) || !state.positions.has(target)) continue
+    state.edges.push({
+      id: `overview:spouse:${family.id}:${source}:${target}`,
+      source,
+      target,
+      label: '',
+      type: 'line',
+      relation: 'spouse',
+      style: treeLineStyle(1.6)
+    })
+  }
+}
+
+/**
+ * 生成全景亲子线。
+ */
+function addOverviewChildEdges(state, family) {
+  const parents = family.partners.filter(id => state.positions.has(id))
+  const children = family.children.filter(id => state.positions.has(id))
+  if (!parents.length || !children.length) return
+
+  const parentCenter = averagePosition(state, parents)
+  children.forEach(childId => {
+    addRoutedLine(
+      state,
+      `overview:child:${family.id}:${childId}`,
+      parentCenter,
+      state.positions.get(childId),
+      'child',
+      'overview-link'
+    )
+  })
+}
+
+/**
+ * 计算一组人物的平均位置。
+ */
+function averagePosition(state, personIds) {
+  const points = personIds.map(id => state.positions.get(id)).filter(Boolean)
+  return {
+    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    y: points.reduce((sum, point) => sum + point.y, 0) / points.length
+  }
 }
 
 /**
@@ -544,7 +785,7 @@ function getTotalWidth(widths, gap) {
 /**
  * 把人物转换为 G6 节点。
  */
-function toPersonNode(person, position) {
+function toPersonNode(person, position, size = PERSON_SIZE) {
   return {
     id: person.id,
     x: position.x,
@@ -553,7 +794,7 @@ function toPersonNode(person, position) {
     label: person.name,
     nodeType: 'person',
     raw: person,
-    size: [PERSON_SIZE.width, PERSON_SIZE.height],
+    size: [size.width, size.height],
     style: {
       radius: 7,
       fill: GRAPH_STYLE.nodeFill,
@@ -570,6 +811,15 @@ function toPersonNode(person, position) {
       }
     }
   }
+}
+
+/**
+ * 按稳定字段比较人物顺序。
+ */
+function comparePersons(left, right) {
+  return String(left?.birth_date || '').localeCompare(String(right?.birth_date || '')) ||
+    String(left?.name || '').localeCompare(String(right?.name || '')) ||
+    String(left?.id || '').localeCompare(String(right?.id || ''))
 }
 
 /**

@@ -29,4 +29,16 @@ describe('useGraphInteractions', () => {
     expect(result).toHaveLength(1)
     expect(interactions.searchResults.value[0].name).toBe('张三')
   })
+
+  it('focuses people through the formal mainline loader', async () => {
+    const graphData = {
+      loadMainlineGraph: vi.fn().mockResolvedValue({})
+    }
+    const interactions = useGraphInteractions(graphData)
+
+    await interactions.focusPerson('p1')
+
+    expect(graphData.loadMainlineGraph).toHaveBeenCalledWith('p1')
+    expect(interactions.selectedPerson.value).toBeNull()
+  })
 })

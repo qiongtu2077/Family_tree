@@ -1,11 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useGraphData } from '../composables/useGraphData'
-import { getFocusGraph, getGraphIssues, getRelationPath } from '../api/graph'
+import {
+  getBranchGraph,
+  getBranchGraphByRoot,
+  getBridgeGraph,
+  getFocusGraph,
+  getGraphIssues,
+  getInlawGraph,
+  getMainlineGraph,
+  getOverviewGraph,
+  getRelationPath
+} from '../api/graph'
 import { getPersons, searchPersons } from '../api/persons'
 
 vi.mock('../api/graph', () => ({
+  getBranchGraph: vi.fn(),
+  getBranchGraphByRoot: vi.fn(),
+  getBridgeGraph: vi.fn(),
   getFocusGraph: vi.fn(),
   getGraphIssues: vi.fn(),
+  getInlawGraph: vi.fn(),
+  getMainlineGraph: vi.fn(),
+  getOverviewGraph: vi.fn(),
   getRelationPath: vi.fn()
 }))
 
@@ -57,6 +73,31 @@ describe('useGraphData', () => {
     expect(data.personNodes.value).toHaveLength(1)
     expect(data.familyUnitNodes.value).toHaveLength(1)
     expect(data.isLoading.value).toBe(false)
+  })
+
+  it('loads all five formal graph views with dedicated APIs', async () => {
+    getMainlineGraph.mockResolvedValue({ view_mode: 'mainline', center_person_id: 'p1', nodes: [], edges: [] })
+    getInlawGraph.mockResolvedValue({ view_mode: 'inlaw', center_person_id: 'p2', nodes: [], edges: [] })
+    getBridgeGraph.mockResolvedValue({ view_mode: 'bridge', center_person_id: 'p1', nodes: [], edges: [] })
+    getBranchGraph.mockResolvedValue({ view_mode: 'branch', nodes: [], edges: [] })
+    getBranchGraphByRoot.mockResolvedValue({ view_mode: 'branch', center_person_id: 'p1', nodes: [], edges: [] })
+    getOverviewGraph.mockResolvedValue({ view_mode: 'overview', nodes: [], edges: [] })
+    const data = useGraphData()
+
+    await data.loadMainlineGraph('p1', 2, 4)
+    await data.loadInlawGraph('p1', 'p2', 3)
+    await data.loadBridgeGraph('p1', 'p2', 2, 'f1')
+    await data.loadBranchGraph('person', 'p1', 5)
+    await data.loadBranchGraph('familyUnit', 'family:f1', 5)
+    await data.loadOverviewGraph('all', 300)
+
+    expect(getMainlineGraph).toHaveBeenCalledWith('p1', 2, 4)
+    expect(getInlawGraph).toHaveBeenCalledWith('p1', 'p2', 3)
+    expect(getBridgeGraph).toHaveBeenCalledWith('p1', 'p2', 2, 'f1')
+    expect(getBranchGraphByRoot).toHaveBeenCalledWith('person', 'p1', 5)
+    expect(getBranchGraph).toHaveBeenCalledWith('f1', 5)
+    expect(getOverviewGraph).toHaveBeenCalledWith('all', 300)
+    expect(data.graph.value.view_mode).toBe('overview')
   })
 
   it('stores error message when focus graph fails', async () => {

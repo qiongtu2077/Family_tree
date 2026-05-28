@@ -25,6 +25,22 @@ class GraphViewService:
 
     # --- 视图数据 --- #
 
+    def get_mainline_graph(
+        self,
+        person_id: str,
+        ancestor_depth: int,
+        descendant_depth: int,
+    ) -> GraphViewResponse | None:
+        """生成本家主线图。"""
+        raw_graph = self.repository.get_mainline_graph(
+            person_id,
+            ancestor_depth,
+            descendant_depth,
+        )
+        if not raw_graph:
+            return None
+        return self._build_graph_response(raw_graph, "mainline", center_person_id=str(person_id))
+
     def get_focus_graph(self, person_id: str, generations: int) -> GraphViewResponse | None:
         """生成中心人物本家主线图。"""
         raw_graph = self.repository.get_focus_graph(person_id, generations)
@@ -32,12 +48,62 @@ class GraphViewService:
             return None
         return self._build_graph_response(raw_graph, "mainline", center_person_id=str(person_id))
 
+    def get_inlaw_graph(
+        self,
+        person_id: str,
+        spouse_id: str,
+        depth: int,
+    ) -> GraphViewResponse | None:
+        """生成配偶原生家族的姻亲谱系图。"""
+        raw_graph = self.repository.get_inlaw_graph(person_id, spouse_id, depth)
+        if not raw_graph:
+            return None
+        return self._build_graph_response(raw_graph, "inlaw", center_person_id=str(spouse_id))
+
+    def get_bridge_graph(
+        self,
+        person_id: str,
+        spouse_id: str,
+        depth: int,
+        family_unit_id: str | None = None,
+    ) -> GraphViewResponse | None:
+        """生成两边家族通过婚姻连接的桥接图。"""
+        raw_graph = self.repository.get_bridge_graph(
+            person_id,
+            spouse_id,
+            depth,
+            family_unit_id=family_unit_id,
+        )
+        if not raw_graph:
+            return None
+        return self._build_graph_response(raw_graph, "bridge", center_person_id=str(person_id))
+
     def get_branch_graph(self, family_unit_id: str, depth: int) -> GraphViewResponse | None:
         """生成指定家庭单元的后代分支图。"""
         raw_graph = self.repository.get_branch_graph(family_unit_id, depth)
         if not raw_graph:
             return None
         return self._build_graph_response(raw_graph, "branch")
+
+    def get_branch_graph_by_root(
+        self,
+        root_type: str,
+        root_id: str,
+        depth: int,
+    ) -> GraphViewResponse | None:
+        """生成指定人物或家庭单元根节点的后代分支图。"""
+        raw_graph = self.repository.get_branch_graph_by_root(root_type, root_id, depth)
+        if not raw_graph:
+            return None
+        center_person_id = str(root_id) if root_type == "person" else None
+        return self._build_graph_response(raw_graph, "branch", center_person_id=center_person_id)
+
+    def get_overview_graph(self, scope: str, max_nodes: int) -> GraphViewResponse | None:
+        """生成家族全景图。"""
+        raw_graph = self.repository.get_overview_graph(scope, max_nodes)
+        if not raw_graph:
+            return None
+        return self._build_graph_response(raw_graph, "overview")
 
     def get_graph_issues(self) -> list[GraphIssue]:
         """生成管理员异常诊断列表。"""
@@ -64,10 +130,12 @@ class GraphViewService:
         center_person_id: str | None = None,
     ) -> GraphViewResponse:
         """把 Neo4j 原始图记录转换为前端图谱响应。"""
-        persons = [_to_person_node(person) for person in raw_graph.get("persons", []) if person]
-        family_units = [
+        persons = _dedupe_nodes([
+            _to_person_node(person) for person in raw_graph.get("persons", []) if person
+        ])
+        family_units = _dedupe_nodes([
             _to_family_unit_node(unit) for unit in raw_graph.get("family_units", []) if unit
-        ]
+        ])
 
         edges = []
         seen_edges = set()
@@ -83,13 +151,13 @@ class GraphViewService:
                     edges.append(edge)
                     seen_edges.add(edge.id)
 
-        warnings = _build_warnings(persons, family_units, edges)
+        warnings = [*raw_graph.get("warnings", []), *_build_warnings(persons, family_units, edges)]
         return GraphViewResponse(
             view_mode=view_mode,
             center_person_id=center_person_id,
             nodes=[*persons, *family_units],
             edges=edges,
-            hidden_relation_count=0,
+            hidden_relation_count=int(raw_graph.get("hidden_relation_count", 0) or 0),
             warnings=warnings,
         )
 
@@ -113,6 +181,18 @@ def _to_person_node(node) -> GraphPerson:
         achievements=data.get("achievements"),
         badges=_person_badges(data),
     )
+
+
+def _dedupe_nodes(nodes: list[GraphPerson | GraphFamilyUnit]) -> list[GraphPerson | GraphFamilyUnit]:
+    """按节点 ID 保序去重。"""
+    seen = set()
+    result = []
+    for node in nodes:
+        if node.id in seen:
+            continue
+        result.append(node)
+        seen.add(node.id)
+    return result
 
 
 def _to_family_unit_node(node) -> GraphFamilyUnit:

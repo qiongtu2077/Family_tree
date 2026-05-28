@@ -3,7 +3,17 @@
  * 负责加载人物列表、中心图、关系路径和异常信息。
  */
 import { computed, ref } from 'vue'
-import { getFocusGraph, getGraphIssues, getRelationPath } from '../api/graph'
+import {
+  getBranchGraph,
+  getBranchGraphByRoot,
+  getBridgeGraph,
+  getFocusGraph,
+  getGraphIssues,
+  getInlawGraph,
+  getMainlineGraph,
+  getOverviewGraph,
+  getRelationPath
+} from '../api/graph'
 import { getPersons, searchPersons } from '../api/persons'
 
 /**
@@ -38,15 +48,15 @@ export function useGraphData() {
   }
 
   /**
-   * 加载中心人物图谱。
+   * 统一执行图谱加载并维护 loading/error 状态。
    */
-  async function loadFocusGraph(personId, generations = 5) {
+  async function loadGraph(loader, fallbackCenterPersonId = null) {
     isLoading.value = true
     errorMessage.value = ''
     try {
-      const data = await getFocusGraph(personId, generations)
+      const data = await loader()
       graph.value = data
-      centerPersonId.value = data.center_person_id || personId
+      centerPersonId.value = data.center_person_id || fallbackCenterPersonId
       return data
     } catch (error) {
       errorMessage.value = error.response?.data?.detail || error.message
@@ -54,6 +64,57 @@ export function useGraphData() {
     } finally {
       isLoading.value = false
     }
+  }
+
+  /**
+   * 加载中心人物图谱。
+   */
+  async function loadFocusGraph(personId, generations = 5) {
+    return loadGraph(() => getFocusGraph(personId, generations), personId)
+  }
+
+  /**
+   * 加载本家主线图。
+   */
+  async function loadMainlineGraph(personId, ancestorDepth = 3, descendantDepth = 3) {
+    return loadGraph(
+      () => getMainlineGraph(personId, ancestorDepth, descendantDepth),
+      personId
+    )
+  }
+
+  /**
+   * 加载姻亲谱系图。
+   */
+  async function loadInlawGraph(personId, spouseId, depth = 3) {
+    return loadGraph(() => getInlawGraph(personId, spouseId, depth), spouseId)
+  }
+
+  /**
+   * 加载联姻桥接图。
+   */
+  async function loadBridgeGraph(personId, spouseId, depth = 2, familyUnitId = null) {
+    return loadGraph(
+      () => getBridgeGraph(personId, spouseId, depth, familyUnitId),
+      personId
+    )
+  }
+
+  /**
+   * 加载后代分支图。
+   */
+  async function loadBranchGraph(rootType, rootId, depth = 5) {
+    const loader = rootType === 'familyUnit'
+      ? () => getBranchGraph(stripFamilyPrefix(rootId), depth)
+      : () => getBranchGraphByRoot(rootType, rootId, depth)
+    return loadGraph(loader, rootType === 'person' ? rootId : centerPersonId.value)
+  }
+
+  /**
+   * 加载家族全景图。
+   */
+  async function loadOverviewGraph(scope = 'all', maxNodes = 300) {
+    return loadGraph(() => getOverviewGraph(scope, maxNodes), centerPersonId.value)
   }
 
   /**
@@ -85,7 +146,19 @@ export function useGraphData() {
     loadPeople,
     searchPeople,
     loadFocusGraph,
+    loadMainlineGraph,
+    loadInlawGraph,
+    loadBridgeGraph,
+    loadBranchGraph,
+    loadOverviewGraph,
     loadRelationPath,
     loadIssues
   }
+}
+
+/**
+ * 去掉前端 family: 前缀，供兼容旧分支接口使用。
+ */
+function stripFamilyPrefix(familyUnitId) {
+  return String(familyUnitId || '').replace(/^family:/, '')
 }

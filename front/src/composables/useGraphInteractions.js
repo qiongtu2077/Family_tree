@@ -44,7 +44,7 @@ export function useGraphInteractions(graphData) {
    */
   async function focusPerson(personId) {
     selectedPerson.value = null
-    await graphData.loadFocusGraph(personId)
+    await graphData.loadMainlineGraph(personId)
   }
 
   return {

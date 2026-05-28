@@ -84,4 +84,39 @@ describe('useGraphLayout', () => {
     expect(childEdges.every(edge => edge.type === 'line')).toBe(true)
     expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
   })
+
+  it('uses independent overview layout and keeps every person visible', async () => {
+    const personNodes = Array.from({ length: 44 }, (_, index) => ({
+      id: `p${index + 1}`,
+      type: 'person',
+      name: `人物${index + 1}`,
+      gender: 'U',
+      birth_date: `19${String(index + 1).padStart(2, '0')}-01-01`
+    }))
+    const familyNodes = [
+      { id: 'family:f1', type: 'familyUnit', family_type: 'marriage' },
+      { id: 'family:f2', type: 'familyUnit', family_type: 'marriage' }
+    ]
+    const data = await layoutGraph({
+      view_mode: 'overview',
+      nodes: [...personNodes, ...familyNodes],
+      edges: [
+        { id: 'e1', source: 'p1', target: 'family:f1', relation: 'partner' },
+        { id: 'e2', source: 'p2', target: 'family:f1', relation: 'partner' },
+        { id: 'e3', source: 'family:f1', target: 'p3', relation: 'biological' },
+        { id: 'e4', source: 'p3', target: 'family:f2', relation: 'partner' },
+        { id: 'e5', source: 'p4', target: 'family:f2', relation: 'partner' },
+        { id: 'e6', source: 'family:f2', target: 'p5', relation: 'biological' }
+      ]
+    })
+
+    const visiblePersons = data.nodes.filter(node => node.nodeType === 'person')
+    const familyUnitNodes = data.nodes.filter(node => node.nodeType === 'familyUnit')
+
+    expect(visiblePersons).toHaveLength(44)
+    expect(familyUnitNodes).toHaveLength(0)
+    expect(visiblePersons.every(node => node.label.startsWith('人物'))).toBe(true)
+    expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
+    expect(data.edges.some(edge => edge.style.stroke === '#00a6ff')).toBe(false)
+  })
 })

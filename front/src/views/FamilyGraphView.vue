@@ -95,21 +95,20 @@ defineEmits(['logout'])
 
 const data = useGraphData()
 const interactions = useGraphInteractions(data)
+let isRevertingView = false
 
 const viewLabels = {
   mainline: '本家主线图',
   inlaw: '姻亲谱系图',
   bridge: '联姻桥接图',
-  path: '关系路径图',
   branch: '后代分支图',
   overview: '家族全景图'
 }
 
 const viewHints = {
   mainline: '围绕中心人物展示祖先、后代、配偶和必要家庭单元。',
-  inlaw: '点击配偶后可切换为配偶原生家族主线。',
+  inlaw: '以明确选中的配偶为中心，展示配偶原生家族。',
   bridge: '有限展示两边家族，通过婚姻桥接点解释联姻。',
-  path: '只展示两个人之间的关键关系路径。',
   branch: '从某个祖先或家庭单元向下展开后代分支。',
   overview: '管理员排查孤立节点、重复人物和异常关系。'
 }
@@ -119,8 +118,12 @@ const currentViewHint = computed(() => viewHints[interactions.selectedView.value
 
 watch(
   () => interactions.selectedView.value,
-  async view => {
-    if (view === 'path') await openRelationPanel()
+  async (view, previousView) => {
+    if (isRevertingView) {
+      isRevertingView = false
+      return
+    }
+    await switchGraphView(view, previousView)
   }
 )
 
@@ -135,6 +138,10 @@ async function handleSearch() {
  * 聚焦到指定人物。
  */
 async function focusPerson(personId) {
+  if (interactions.selectedView.value !== 'mainline') {
+    isRevertingView = true
+    interactions.selectedView.value = 'mainline'
+  }
   await interactions.focusPerson(personId)
   interactions.searchResults.value = []
 }
@@ -166,13 +173,128 @@ onMounted(async () => {
   if (!defaultPersonId) return
 
   try {
-    await data.loadFocusGraph(defaultPersonId)
+    await data.loadMainlineGraph(defaultPersonId)
   } catch {
     if (people[0]?.id && people[0].id !== defaultPersonId) {
-      await data.loadFocusGraph(people[0].id)
+      await data.loadMainlineGraph(people[0].id)
     }
   }
 })
+
+/**
+ * 根据五图状态切换加载对应图谱。
+ */
+async function switchGraphView(view, previousView) {
+  const centerId = getActivePersonId()
+  if (!centerId) return
+
+  try {
+    if (view === 'mainline') {
+      await data.loadMainlineGraph(centerId)
+      return
+    }
+    if (view === 'overview') {
+      await data.loadOverviewGraph('all', 300)
+      return
+    }
+    if (view === 'branch') {
+      const branchTarget = findBranchTarget(centerId)
+      if (!branchTarget) {
+        keepPreviousView(previousView, '当前图中没有可展开的后代分支')
+        return
+      }
+      await data.loadBranchGraph(branchTarget.rootType, branchTarget.rootId)
+      return
+    }
+    if (view === 'inlaw' || view === 'bridge') {
+      const spouseLink = findSpouseLink(centerId)
+      if (!spouseLink) {
+        keepPreviousView(previousView, '请先选中一个存在配偶/伴侣关系的人物')
+        return
+      }
+      if (view === 'inlaw') {
+        await data.loadInlawGraph(spouseLink.personId, spouseLink.spouseId)
+      } else {
+        await data.loadBridgeGraph(spouseLink.personId, spouseLink.spouseId, 2, spouseLink.familyUnitId)
+      }
+    }
+  } catch {
+    keepPreviousView(previousView || 'mainline', data.errorMessage.value)
+  }
+}
+
+/**
+ * 读取当前操作人物 ID。
+ */
+function getActivePersonId() {
+  return interactions.selectedPersonId.value || data.centerPersonId.value || ''
+}
+
+/**
+ * 从当前图中找明确的配偶/伴侣关系。
+ */
+function findSpouseLink(personId) {
+  const graph = data.graph.value
+  const personIds = new Set(graph.nodes.filter(node => node.type === 'person').map(node => node.id))
+  const preferredId = personIds.has(personId) ? personId : data.centerPersonId.value
+  const spouseEdge = graph.edges.find(edge => (
+    edge.relation === 'spouse' &&
+    (edge.source === preferredId || edge.target === preferredId)
+  ))
+  if (spouseEdge) {
+    return {
+      personId: preferredId,
+      spouseId: spouseEdge.source === preferredId ? spouseEdge.target : spouseEdge.source,
+      familyUnitId: null
+    }
+  }
+
+  const familiesByPerson = new Map()
+  graph.edges.forEach(edge => {
+    if (!edge.target?.startsWith?.('family:')) return
+    if (!personIds.has(edge.source)) return
+    if (!familiesByPerson.has(edge.target)) familiesByPerson.set(edge.target, [])
+    familiesByPerson.get(edge.target).push(edge.source)
+  })
+
+  for (const [familyUnitId, partners] of familiesByPerson.entries()) {
+    if (!partners.includes(preferredId) || partners.length < 2) continue
+    return {
+      personId: preferredId,
+      spouseId: partners.find(id => id !== preferredId),
+      familyUnitId: familyUnitId.replace(/^family:/, '')
+    }
+  }
+
+  return null
+}
+
+/**
+ * 从当前图中找后代分支根节点。
+ */
+function findBranchTarget(personId) {
+  const graph = data.graph.value
+  const familyEdge = graph.edges.find(edge => (
+    edge.source === personId &&
+    edge.target?.startsWith?.('family:')
+  ))
+  if (familyEdge) {
+    return { rootType: 'familyUnit', rootId: familyEdge.target }
+  }
+  if (personId) return { rootType: 'person', rootId: personId }
+  return null
+}
+
+/**
+ * 切换失败时回退到原视图并提示原因。
+ */
+function keepPreviousView(previousView, message) {
+  if (previousView && interactions.selectedView.value !== previousView) {
+    isRevertingView = true
+    interactions.selectedView.value = previousView
+  }
+  data.errorMessage.value = message || '当前视图暂不可切换'
+}
 
 /**
  * 兼容旧账号绑定的 SQL 自增 ID。
