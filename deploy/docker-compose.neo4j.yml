@@ -1,0 +1,21 @@
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: family_tree_neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/<ROTATED_NEO4J_PASSWORD>
+    volumes:
+      - family_tree_neo4j_data:/data
+      - family_tree_neo4j_logs:/logs
+      - family_tree_neo4j_import:/var/lib/neo4j/import
+      - family_tree_neo4j_plugins:/plugins
+    restart: unless-stopped
+
+volumes:
+  family_tree_neo4j_data:
+  family_tree_neo4j_logs:
+  family_tree_neo4j_import:
+  family_tree_neo4j_plugins:
