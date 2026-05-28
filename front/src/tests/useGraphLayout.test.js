@@ -143,6 +143,10 @@ describe('useGraphLayout', () => {
     expect(childEdges[0].segment).toBe('parent-stem')
     expect(childEdges.some(edge => edge.segment === 'sibling-bus')).toBe(false)
     expect(childEdges.every(edge => edge.type === 'line')).toBe(true)
+
+    const spouse = data.nodes.find(node => node.id === 'father')
+    const parentStemStart = data.nodes.find(node => node.id === 'child:family:f1:parent-stem:start')
+    expect(parentStemStart.y).toBe(spouse.y)
   })
 
   it('uses the center person as the bridge marriage anchor', async () => {
@@ -168,6 +172,64 @@ describe('useGraphLayout', () => {
 
     expect(husband.y).toBe(wife.y)
     expect(child.y).toBeGreaterThan(husband.y)
+    expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
+  })
+
+  it('keeps bridge view as a compact marriage bridge without ancestor spillover', async () => {
+    const data = await layoutGraph({
+      view_mode: 'bridge',
+      center_person_id: 'husband',
+      nodes: [
+        { id: 'husband-grandfather', type: 'person', name: '夫祖父' },
+        { id: 'husband-grandmother', type: 'person', name: '夫祖母' },
+        { id: 'husband-father', type: 'person', name: '夫父' },
+        { id: 'husband-mother', type: 'person', name: '夫母' },
+        { id: 'husband', type: 'person', name: '丈夫' },
+        { id: 'husband-sibling', type: 'person', name: '夫同胞' },
+        { id: 'wife-father', type: 'person', name: '妻父' },
+        { id: 'wife-mother', type: 'person', name: '妻母' },
+        { id: 'wife', type: 'person', name: '妻子' },
+        { id: 'wife-sibling', type: 'person', name: '妻同胞' },
+        { id: 'child', type: 'person', name: '孩子' },
+        { id: 'family:husband-grandparents', type: 'familyUnit' },
+        { id: 'family:husband-origin', type: 'familyUnit' },
+        { id: 'family:wife-origin', type: 'familyUnit' },
+        { id: 'family:marriage', type: 'familyUnit' }
+      ],
+      edges: [
+        { id: 'e1', source: 'husband-grandfather', target: 'family:husband-grandparents', relation: 'partner' },
+        { id: 'e2', source: 'husband-grandmother', target: 'family:husband-grandparents', relation: 'partner' },
+        { id: 'e3', source: 'family:husband-grandparents', target: 'husband-father', relation: 'biological' },
+        { id: 'e4', source: 'husband-father', target: 'family:husband-origin', relation: 'partner' },
+        { id: 'e5', source: 'husband-mother', target: 'family:husband-origin', relation: 'partner' },
+        { id: 'e6', source: 'family:husband-origin', target: 'husband', relation: 'biological' },
+        { id: 'e7', source: 'family:husband-origin', target: 'husband-sibling', relation: 'biological' },
+        { id: 'e8', source: 'wife-father', target: 'family:wife-origin', relation: 'partner' },
+        { id: 'e9', source: 'wife-mother', target: 'family:wife-origin', relation: 'partner' },
+        { id: 'e10', source: 'family:wife-origin', target: 'wife', relation: 'biological' },
+        { id: 'e11', source: 'family:wife-origin', target: 'wife-sibling', relation: 'biological' },
+        { id: 'e12', source: 'husband', target: 'family:marriage', relation: 'partner' },
+        { id: 'e13', source: 'wife', target: 'family:marriage', relation: 'partner' },
+        { id: 'e14', source: 'family:marriage', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const personIds = data.nodes
+      .filter(node => node.nodeType === 'person')
+      .map(node => node.id)
+    const husband = data.nodes.find(node => node.id === 'husband')
+    const wife = data.nodes.find(node => node.id === 'wife')
+    const child = data.nodes.find(node => node.id === 'child')
+    const husbandSibling = data.nodes.find(node => node.id === 'husband-sibling')
+    const wifeSibling = data.nodes.find(node => node.id === 'wife-sibling')
+
+    expect(personIds).not.toContain('husband-grandfather')
+    expect(personIds).not.toContain('husband-grandmother')
+    expect(husband.x).toBeLessThan(wife.x)
+    expect(child.x).toBe((husband.x + wife.x) / 2)
+    expect(child.y).toBeGreaterThan(husband.y)
+    expect(husbandSibling.x).toBeLessThan(husband.x)
+    expect(wifeSibling.x).toBeGreaterThan(wife.x)
     expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
   })
 })

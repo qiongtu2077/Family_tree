@@ -14,6 +14,7 @@ import {
   getOverviewGraph,
   getRelationPath
 } from '../api/graph'
+import { getFallbackGraph, getFallbackPeople } from '../api/demoGraphFallback'
 import { getPersons, searchPersons } from '../api/persons'
 
 /**
@@ -40,7 +41,8 @@ export function useGraphData() {
       return people.value
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
-      throw error
+      people.value = getFallbackPeople()
+      return people.value
     }
   }
 
@@ -55,27 +57,42 @@ export function useGraphData() {
   /**
    * 统一执行图谱加载并维护 loading/error 状态。
    */
-  async function loadGraph(loader, fallbackCenterPersonId = null) {
+  async function loadGraph(loader, fallbackCenterPersonId = null, fallbackViewMode = 'mainline') {
     isLoading.value = true
     errorMessage.value = ''
     try {
       const data = await loader()
+      if (!isRenderableGraph(data)) {
+        errorMessage.value = '接口返回空图谱，已显示本地演示数据'
+        return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child')
+      }
       graph.value = data
       centerPersonId.value = data.center_person_id || fallbackCenterPersonId
       return data
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
-      throw error
+      return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child')
     } finally {
       isLoading.value = false
     }
   }
 
   /**
+   * 立即切换到本地演示图谱，避免真实库不可用时画布空白。
+   */
+  function useFallbackGraph(viewMode = 'mainline', fallbackPersonId = 'demo:child') {
+    const fallbackGraph = getFallbackGraph(viewMode, fallbackPersonId)
+    graph.value = fallbackGraph
+    centerPersonId.value = fallbackGraph.center_person_id || fallbackPersonId
+    if (!people.value.length) people.value = getFallbackPeople()
+    return fallbackGraph
+  }
+
+  /**
    * 加载中心人物图谱。
    */
   async function loadFocusGraph(personId, generations = 5) {
-    return loadGraph(() => getFocusGraph(personId, generations), personId)
+    return loadGraph(() => getFocusGraph(personId, generations), personId, 'mainline')
   }
 
   /**
@@ -84,7 +101,8 @@ export function useGraphData() {
   async function loadMainlineGraph(personId, ancestorDepth = 3, descendantDepth = 3) {
     return loadGraph(
       () => getMainlineGraph(personId, ancestorDepth, descendantDepth),
-      personId
+      personId,
+      'mainline'
     )
   }
 
@@ -92,7 +110,7 @@ export function useGraphData() {
    * 加载姻亲谱系图。
    */
   async function loadInlawGraph(personId, spouseId, depth = 3) {
-    return loadGraph(() => getInlawGraph(personId, spouseId, depth), spouseId)
+    return loadGraph(() => getInlawGraph(personId, spouseId, depth), spouseId, 'inlaw')
   }
 
   /**
@@ -101,7 +119,8 @@ export function useGraphData() {
   async function loadBridgeGraph(personId, spouseId, depth = 2, familyUnitId = null) {
     return loadGraph(
       () => getBridgeGraph(personId, spouseId, depth, familyUnitId),
-      personId
+      personId,
+      'bridge'
     )
   }
 
@@ -112,14 +131,14 @@ export function useGraphData() {
     const loader = rootType === 'familyUnit'
       ? () => getBranchGraph(stripFamilyPrefix(rootId), depth)
       : () => getBranchGraphByRoot(rootType, rootId, depth)
-    return loadGraph(loader, rootType === 'person' ? rootId : centerPersonId.value)
+    return loadGraph(loader, rootType === 'person' ? rootId : centerPersonId.value, 'branch')
   }
 
   /**
    * 加载家族全景图。
    */
   async function loadOverviewGraph(scope = 'all', maxNodes = 300) {
-    return loadGraph(() => getOverviewGraph(scope, maxNodes), centerPersonId.value)
+    return loadGraph(() => getOverviewGraph(scope, maxNodes), centerPersonId.value, 'overview')
   }
 
   /**
@@ -157,7 +176,8 @@ export function useGraphData() {
     loadBranchGraph,
     loadOverviewGraph,
     loadRelationPath,
-    loadIssues
+    loadIssues,
+    useFallbackGraph
   }
 }
 
@@ -166,6 +186,13 @@ export function useGraphData() {
  */
 function stripFamilyPrefix(familyUnitId) {
   return String(familyUnitId || '').replace(/^family:/, '')
+}
+
+/**
+ * 判断接口图谱是否足够渲染。
+ */
+function isRenderableGraph(data) {
+  return Array.isArray(data?.nodes) && data.nodes.length > 0
 }
 
 /**

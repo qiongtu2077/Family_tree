@@ -167,6 +167,10 @@ async function openAdminPanel() {
  * 进入页面时加载默认图谱。
  */
 onMounted(async () => {
+  const warmupGraph = data.useFallbackGraph('mainline', 'demo:child')
+  const warmupPerson = warmupGraph.nodes.find(node => node.id === warmupGraph.center_person_id)
+  if (warmupPerson) interactions.selectPerson(warmupPerson)
+
   let people = []
   try {
     people = await data.loadPeople()

@@ -106,10 +106,45 @@ describe('useGraphData', () => {
     })
     const data = useGraphData()
 
-    await expect(data.loadFocusGraph('missing')).rejects.toBeTruthy()
+    const graph = await data.loadFocusGraph('missing')
 
     expect(data.errorMessage.value).toBe('人物不存在')
     expect(data.isLoading.value).toBe(false)
+    expect(graph.nodes.length).toBeGreaterThan(0)
+    expect(graph.warnings[0]).toContain('Neo4j 暂不可用')
+  })
+
+  it('falls back when an API returns an empty graph', async () => {
+    getMainlineGraph.mockResolvedValue({ view_mode: 'mainline', center_person_id: 'p1', nodes: [], edges: [] })
+    const data = useGraphData()
+
+    const graph = await data.loadMainlineGraph('p1')
+
+    expect(data.errorMessage.value).toBe('接口返回空图谱，已显示本地演示数据')
+    expect(graph.nodes.length).toBeGreaterThan(0)
+    expect(graph.center_person_id).toBe('demo:child')
+  })
+
+  it('can warm up the graph with local demo data immediately', () => {
+    const data = useGraphData()
+
+    const graph = data.useFallbackGraph('mainline', 'demo:child')
+
+    expect(graph.nodes.length).toBeGreaterThan(0)
+    expect(data.graph.value.warnings[0]).toContain('Neo4j 暂不可用')
+    expect(data.people.value.length).toBeGreaterThan(40)
+  })
+
+  it('falls back to local demo people when Neo4j is unavailable', async () => {
+    getPersons.mockRejectedValue({
+      response: { data: { detail: 'Neo4j 服务不可用' } }
+    })
+    const data = useGraphData()
+
+    const people = await data.loadPeople()
+
+    expect(people.length).toBeGreaterThan(40)
+    expect(data.errorMessage.value).toBe('Neo4j 服务不可用')
   })
 
   it('loads relation path and admin issues', async () => {

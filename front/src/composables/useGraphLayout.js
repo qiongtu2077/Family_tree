@@ -10,6 +10,9 @@ const FAMILY_GAP = 138
 const LEVEL_GAP = 128
 const TOP_PADDING = 42
 const CHILD_BUS_OFFSET = 70
+const BRIDGE_PARTNER_SPACING = 300
+const BRIDGE_PARENT_OFFSET = 150
+const BRIDGE_SIBLING_STEP = PERSON_SIZE.width + SIBLING_GAP
 const GRAPH_STYLE = {
   nodeFill: 'rgba(24, 24, 20, 0.94)',
   nodeStroke: 'rgba(255, 238, 137, 0.72)',
@@ -246,14 +249,15 @@ function layoutBridge(model) {
   if (!centralFamily) return layoutMainline(model)
 
   const state = createLayoutState(model)
-  const partnerY = TOP_PADDING + LEVEL_GAP
+  const partnerY = TOP_PADDING + LEVEL_GAP * 2
   const partners = orderPartners(centralFamily.partners, model.centerPersonId)
-  const partnerPositions = placePartners(state, partners, 0, partnerY, model.centerPersonId)
+  const partnerPositions = placeBridgePartners(state, partners, partnerY)
   const familyCenter = getFamilyCenter(partnerPositions, 0)
   const anchor = createFamilyAnchor(state, centralFamily.id, familyCenter.x, partnerY)
   state.placedFamilies.add(centralFamily.id)
   addSpouseEdge(state, centralFamily.id, partners)
-  layoutBridgeAncestors(state, partners)
+  layoutBridgeSideFamily(state, partners[0], -1, partnerY)
+  layoutBridgeSideFamily(state, partners[1], 1, partnerY)
   layoutBridgeChildren(state, centralFamily, anchor, partnerY)
   return {
     nodes: state.nodes,
@@ -424,7 +428,7 @@ function layoutAncestorFamilies(state, personId, x, level, visitedFamilies) {
     false,
     visitedFamilies
   )
-  addFamilyChildEdges(state, parentFamilyId, anchor, childPositions, level - 1)
+  addFamilyChildEdges(state, parentFamilyId, anchor, childPositions, level - 1, hasSpouseLine(family))
 
   partners.forEach(parentId => {
     layoutAncestorFamilies(state, parentId, state.positions.get(parentId)?.x || x, level - 1, visitedFamilies)
@@ -471,7 +475,7 @@ function layoutFamilyFromAnchorPerson(state, familyId, anchorPersonId, x, level,
     true,
     visitedFamilies
   )
-  addFamilyChildEdges(state, familyId, anchor, childPositions, level)
+  addFamilyChildEdges(state, familyId, anchor, childPositions, level, hasSpouseLine(family))
   childPositions.forEach(({ childId, position }) => {
     layoutDescendantFamilies(state, childId, position.x, level + 1, visitedFamilies)
   })
@@ -523,30 +527,76 @@ function findBridgeFamily(model) {
 }
 
 /**
- * 布局桥接图左右两侧近祖先。
+ * 在桥接图中固定放置中间联姻夫妻，避免被双方原生家庭挤偏。
  */
-function layoutBridgeAncestors(state, partnerIds) {
-  partnerIds.forEach(personId => {
-    const position = state.positions.get(personId)
-    if (!position) return
-    layoutAncestorFamilies(state, personId, position.x, 1, new Set())
+function placeBridgePartners(state, partners, y) {
+  if (partners.length !== 2) {
+    return placePartners(state, partners, 0, y, partners[0])
+  }
+
+  return partners.map((personId, index) => {
+    const side = index === 0 ? -1 : 1
+    return placePerson(state, personId, side * BRIDGE_PARTNER_SPACING / 2, y)
   })
+}
+
+/**
+ * 布局桥接人物的原生家庭，只展示父母和同胞，避免桥接图递归失控。
+ */
+function layoutBridgeSideFamily(state, personId, side, partnerY) {
+  if (!personId || !side) return
+
+  const parentFamilyId = state.parentFamiliesByChild.get(personId)?.[0]
+  const family = state.familyMap.get(parentFamilyId)
+  const personPosition = state.positions.get(personId)
+  if (!family || !personPosition || state.placedFamilies.has(parentFamilyId)) return
+
+  state.placedFamilies.add(parentFamilyId)
+  const parentY = partnerY - LEVEL_GAP
+  const parentLevel = (parentY - TOP_PADDING) / LEVEL_GAP
+  const parentCenterX = personPosition.x + side * BRIDGE_PARENT_OFFSET
+  const parentPositions = placePartners(state, family.partners, parentCenterX, parentY)
+  const familyCenter = getFamilyCenter(parentPositions, parentCenterX)
+  const anchor = createFamilyAnchor(state, parentFamilyId, familyCenter.x, parentY)
+  addSpouseEdge(state, parentFamilyId, family.partners)
+
+  const childPositions = collectBridgeSiblingPositions(state, family, personId, side, personPosition)
+  addFamilyChildEdges(state, parentFamilyId, anchor, childPositions, parentLevel, hasSpouseLine(family))
+}
+
+/**
+ * 收集桥接图同胞位置，中心联姻人物靠近婚姻桥，其他同胞向外侧展开。
+ */
+function collectBridgeSiblingPositions(state, family, personId, side, personPosition) {
+  const positions = [{ childId: personId, position: personPosition }]
+  const siblings = family.children
+    .filter(childId => childId !== personId)
+    .sort((a, b) => comparePersons(state.personMap.get(a), state.personMap.get(b)))
+
+  siblings.forEach((childId, index) => {
+    const x = personPosition.x + side * BRIDGE_SIBLING_STEP * (index + 1)
+    const position = placePerson(state, childId, x, personPosition.y)
+    if (position) positions.push({ childId, position })
+  })
+
+  return positions.sort((left, right) => left.position.x - right.position.x)
 }
 
 /**
  * 布局桥接家庭的共同子女。
  */
 function layoutBridgeChildren(state, family, anchor, partnerY) {
+  const parentLevel = (partnerY - TOP_PADDING) / LEVEL_GAP
   const childPositions = layoutFamilyChildrenOnLevel(
     state,
     family,
     null,
     anchor.x,
-    2,
+    parentLevel + 1,
     false,
     new Set()
   )
-  addFamilyChildEdges(state, family.id, anchor, childPositions, (partnerY - TOP_PADDING) / LEVEL_GAP)
+  addFamilyChildEdges(state, family.id, anchor, childPositions, parentLevel, hasSpouseLine(family))
 }
 
 // --- 全景布局 --- //
@@ -775,7 +825,7 @@ function layoutChildren(state, family, anchor, familyLeft, familyWidth, level, v
     cursor += childWidth + SIBLING_GAP
   })
 
-  addFamilyChildEdges(state, family.id, anchor, childPositions, level)
+  addFamilyChildEdges(state, family.id, anchor, childPositions, level, hasSpouseLine(family))
 }
 
 /**
@@ -908,7 +958,7 @@ function addSpouseEdge(state, familyId, partners) {
 /**
  * 添加家庭到子女的树状分叉线。
  */
-function addFamilyChildEdges(state, familyId, anchor, childPositions, level) {
+function addFamilyChildEdges(state, familyId, anchor, childPositions, level, hasVisibleSpouseLine = false) {
   if (!childPositions.length) return
 
   const parentY = TOP_PADDING + level * LEVEL_GAP
@@ -920,7 +970,7 @@ function addFamilyChildEdges(state, familyId, anchor, childPositions, level) {
   const busStartX = Math.min(anchor.x, ...childXs)
   const busEndX = Math.max(anchor.x, ...childXs)
   const stemStartY = childPositions.length === 1
-    ? parentY + PERSON_SIZE.height / 2
+    ? getChildStemStartY(parentY, hasVisibleSpouseLine)
     : parentY
 
   addRoutedLine(
@@ -955,11 +1005,25 @@ function addFamilyChildEdges(state, familyId, anchor, childPositions, level) {
 }
 
 /**
+ * 计算单子女下行线起点；有夫妻线时从夫妻线中心直下，避免断线。
+ */
+function getChildStemStartY(parentY, hasVisibleSpouseLine) {
+  return hasVisibleSpouseLine ? parentY : parentY + PERSON_SIZE.height / 2
+}
+
+/**
  * 选择人物作为配偶时承载的家庭。
  */
 function findPrimaryPartnerFamily(model, personId, visitedFamilies) {
   const familyIds = model.partnerFamiliesByPerson.get(personId) || []
   return familyIds.find(familyId => !visitedFamilies.has(familyId))
+}
+
+/**
+ * 判断家庭是否存在可见夫妻横线。
+ */
+function hasSpouseLine(family) {
+  return family.partners.length >= 2
 }
 
 /**
