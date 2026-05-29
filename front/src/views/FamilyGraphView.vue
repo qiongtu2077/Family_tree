@@ -19,6 +19,7 @@
           <span>当前视图</span>
           <strong>{{ currentViewLabel }}</strong>
           <p>{{ currentViewHint }}</p>
+          <small v-if="currentContextHint">{{ currentContextHint }}</small>
         </div>
 
         <div v-if="data.errorMessage.value" class="error-card">
@@ -49,6 +50,7 @@
         :is-loading="data.isLoading.value"
         :center-person-id="data.centerPersonId.value"
         @select-person="interactions.selectPerson"
+        @select-capsule="handleCapsuleClick"
       />
 
       <PersonDetailDrawer
@@ -151,6 +153,14 @@ const viewHints = {
 
 const currentViewLabel = computed(() => viewLabels[interactions.selectedView.value] || '本家主线图')
 const currentViewHint = computed(() => viewHints[interactions.selectedView.value] || viewHints.mainline)
+const currentContextHint = computed(() => {
+  const context = data.graphContext.value
+  const fragments = []
+  if (context.projection_reason) fragments.push(projectionReasonText(context.projection_reason))
+  if (context.family_unit_id) fragments.push(`家庭单元 ${context.family_unit_id}`)
+  if (data.graph.value.hidden_relation_count) fragments.push(`已折叠 ${data.graph.value.hidden_relation_count} 人`)
+  return fragments.filter(Boolean).join(' · ')
+})
 const centerPersonName = computed(() => getCenterPersonFallback()?.name || '')
 const requiresCenterPerson = computed(() => interactions.selectedView.value !== 'overview')
 const visibleGraph = computed(() => {
@@ -255,17 +265,12 @@ async function showCenterScope() {
     openCenterModal()
     return
   }
-  const centerPerson = data.centerContext.value?.person ||
-    data.people.value.find(person => person.id === data.centerPersonId.value) ||
-    { id: data.centerPersonId.value }
-  interactions.selectPerson(centerPerson)
-
-  // “九族”需要关系线，不继续使用全景索引散点布局。
-  if (interactions.selectedView.value !== 'mainline') {
+  interactions.clearSelection()
+  if (interactions.selectedView.value !== 'overview') {
     isRevertingView = true
-    interactions.selectedView.value = 'mainline'
+    interactions.selectedView.value = 'overview'
   }
-  await data.loadMainlineGraph(data.centerPersonId.value, 4, 4)
+  await data.loadOverviewGraph(`center:${data.centerPersonId.value}`, 300)
 }
 
 /**
@@ -398,6 +403,37 @@ async function loadBranchView(previousView) {
 }
 
 /**
+ * 点击后端语义胶囊后跳转到目标视图。
+ */
+async function handleCapsuleClick(capsule) {
+  if (!capsule) return
+  if (capsule.target_view === 'branch' && capsule.root_family_unit_id) {
+    isRevertingView = interactions.selectedView.value !== 'branch'
+    interactions.selectedView.value = 'branch'
+    await data.loadBranchGraph('familyUnit', capsule.root_family_unit_id)
+    return
+  }
+  if (capsule.target_view === 'inlaw' && capsule.owner_person_id && data.centerPersonId.value) {
+    selectedSpouseOption.value = { person: { id: capsule.owner_person_id } }
+    isRevertingView = interactions.selectedView.value !== 'inlaw'
+    interactions.selectedView.value = 'inlaw'
+    await data.loadInlawGraph(data.centerPersonId.value, capsule.owner_person_id)
+    return
+  }
+  if (capsule.target_view === 'mainline' && capsule.owner_person_id) {
+    await applyCenterPerson({ id: capsule.owner_person_id }, 'mainline')
+    return
+  }
+  if (capsule.target_view === 'overview') {
+    isRevertingView = interactions.selectedView.value !== 'overview'
+    interactions.selectedView.value = 'overview'
+    await data.loadOverviewGraph(data.centerPersonId.value ? `center:${data.centerPersonId.value}` : 'all', 300)
+    return
+  }
+  data.errorMessage.value = '该折叠分支缺少可跳转的目标信息'
+}
+
+/**
  * 打开五图参数选择弹窗。
  */
 function openParameterModal(mode, view) {
@@ -454,6 +490,23 @@ function getCenterPersonFallback() {
 }
 
 /**
+ * 返回投影原因的中文说明。
+ */
+function projectionReasonText(reason) {
+  const labels = {
+    mainline_projection: '本家主线投影',
+    inlaw_origin_projection: '配偶原生家庭',
+    marriage_bridge_projection: '联姻桥接',
+    explicit_family_unit: '指定家庭分支',
+    own_descendant_branch: '本人后代分支',
+    ancestor_family_fallback: '已回退祖先分支',
+    isolated_person: '孤立人物',
+    nine_kinship_overview: '中心九族索引'
+  }
+  return labels[reason] || reason
+}
+
+/**
  * 兼容旧账号绑定的 SQL 自增 ID。
  */
 function normalizePersonId(personId) {
@@ -471,7 +524,8 @@ function emptyGraph() {
     center_person_id: null,
     nodes: [],
     edges: [],
-    warnings: []
+    warnings: [],
+    view_context: null
   }
 }
 </script>

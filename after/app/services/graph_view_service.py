@@ -15,6 +15,7 @@ from ..graph_schemas import (
     GraphFamilyUnit,
     GraphIssue,
     GraphPerson,
+    GraphViewContext,
     GraphViewResponse,
     NineKinshipSummary,
 )
@@ -63,7 +64,7 @@ class GraphViewService:
         raw_graph = self.repository.get_inlaw_graph(person_id, spouse_id, depth)
         if not raw_graph:
             return None
-        return self._build_graph_response(raw_graph, "inlaw", center_person_id=str(spouse_id))
+        return self._build_graph_response(raw_graph, "inlaw", center_person_id=str(person_id))
 
     def get_bridge_graph(
         self,
@@ -207,14 +208,36 @@ class GraphViewService:
             for item in raw_graph.get("branch_capsules", [])
             if item
         ]
+        view_context = _to_view_context(raw_graph.get("view_context"))
+        resolved_center_person_id = center_person_id or (view_context.center_person_id if view_context else None)
         return GraphViewResponse(
             view_mode=view_mode,
-            center_person_id=center_person_id,
+            center_person_id=resolved_center_person_id,
+            view_context=view_context,
             nodes=[*persons, *family_units, *branch_capsules],
             edges=edges,
             hidden_relation_count=int(raw_graph.get("hidden_relation_count", 0) or 0),
             warnings=warnings,
         )
+
+
+def _to_view_context(data: dict[str, Any] | None) -> GraphViewContext | None:
+    """把原始投影上下文转换为稳定 DTO。"""
+    if not data:
+        return None
+    return GraphViewContext(
+        center_person_id=_optional_str(data.get("center_person_id")),
+        spouse_id=_optional_str(data.get("spouse_id")),
+        family_unit_id=_optional_str(data.get("family_unit_id")),
+        root_type=data.get("root_type"),
+        root_id=_optional_str(data.get("root_id")),
+        projection_reason=_optional_str(data.get("projection_reason")),
+    )
+
+
+def _optional_str(value) -> str | None:
+    """把可选值转换成字符串。"""
+    return str(value) if value is not None and value != "" else None
 
 
 def _to_person_node(node) -> GraphPerson:

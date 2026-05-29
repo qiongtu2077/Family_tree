@@ -57,6 +57,12 @@ class FakeRepository:
         """返回姻亲谱系测试图。"""
         raw = self.get_focus_graph(spouse_id, depth)
         raw["persons"].append(FakeNode(["Person"], {"personId": spouse_id, "name": "配偶"}))
+        raw["view_context"] = {
+            "center_person_id": person_id,
+            "spouse_id": spouse_id,
+            "family_unit_id": "f2",
+            "projection_reason": "inlaw_origin_projection",
+        }
         return raw
 
     def get_bridge_graph(self, person_id, spouse_id, depth, family_unit_id=None):
@@ -64,6 +70,12 @@ class FakeRepository:
         raw = self.get_focus_graph(person_id, depth)
         raw["persons"].append(FakeNode(["Person"], {"personId": spouse_id, "name": "配偶"}))
         raw["warnings"] = ["桥接图只展示近亲范围"]
+        raw["view_context"] = {
+            "center_person_id": person_id,
+            "spouse_id": spouse_id,
+            "family_unit_id": family_unit_id or "f2",
+            "projection_reason": "marriage_bridge_projection",
+        }
         return raw
 
     def get_branch_graph(self, family_unit_id, depth):
@@ -72,7 +84,14 @@ class FakeRepository:
 
     def get_branch_graph_by_root(self, root_type, root_id, depth):
         """返回按根节点读取的后代分支测试图。"""
-        return self.get_focus_graph(root_id, depth)
+        raw = self.get_focus_graph(root_id, depth)
+        raw["view_context"] = {
+            "center_person_id": root_id if root_type == "person" else None,
+            "root_type": root_type,
+            "root_id": root_id,
+            "projection_reason": "own_descendant_branch",
+        }
+        return raw
 
     def get_overview_graph(self, scope, max_nodes):
         """返回全景测试图。"""
@@ -158,6 +177,10 @@ def test_five_formal_graph_views_have_expected_modes():
     assert bridge.view_mode == "bridge"
     assert branch.view_mode == "branch"
     assert overview.view_mode == "overview"
+    assert inlaw.center_person_id == "p2"
+    assert inlaw.view_context.spouse_id == "p3"
+    assert bridge.view_context.family_unit_id == "f2"
+    assert branch.view_context.projection_reason == "own_descendant_branch"
     assert len([node for node in overview.nodes if node.type == "person"]) == 44
     assert "桥接图只展示近亲范围" in bridge.warnings
 

@@ -19,7 +19,7 @@ const props = defineProps({
   centerPersonId: { type: String, default: null }
 })
 
-const emit = defineEmits(['selectPerson'])
+const emit = defineEmits(['selectPerson', 'selectCapsule'])
 
 const containerRef = ref(null)
 let graphInstance = null
@@ -79,6 +79,10 @@ async function ensureGraph() {
     if (model.nodeType === 'person') {
       emit('selectPerson', model.raw)
       setSelectedNode(model.id)
+      return
+    }
+    if (model.nodeType === 'branchCapsule') {
+      emit('selectCapsule', model.raw)
     }
   })
 

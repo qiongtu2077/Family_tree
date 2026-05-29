@@ -22,7 +22,7 @@ import { getPersons, searchPersons } from '../api/persons'
  * 管理族谱数据读取状态。
  */
 export function useGraphData() {
-  const graph = ref({ nodes: [], edges: [], warnings: [] })
+  const graph = ref({ nodes: [], edges: [], warnings: [], view_context: null })
   const people = ref([])
   const issues = ref([])
   const relationPath = ref(null)
@@ -33,6 +33,7 @@ export function useGraphData() {
 
   const personNodes = computed(() => graph.value.nodes.filter(node => node.type === 'person'))
   const familyUnitNodes = computed(() => graph.value.nodes.filter(node => node.type === 'familyUnit'))
+  const graphContext = computed(() => graph.value.view_context || {})
 
   /**
    * 加载人物列表。
@@ -104,7 +105,7 @@ export function useGraphData() {
         return graph.value
       }
       graph.value = data
-      centerPersonId.value = data.center_person_id || expectedCenterPersonId
+      centerPersonId.value = data.view_context?.center_person_id || data.center_person_id || expectedCenterPersonId
       return data
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
@@ -138,7 +139,7 @@ export function useGraphData() {
    * 加载姻亲谱系图。
    */
   async function loadInlawGraph(personId, spouseId, depth = 3) {
-    return loadGraph(() => getInlawGraph(personId, spouseId, depth), spouseId, 'inlaw')
+    return loadGraph(() => getInlawGraph(personId, spouseId, depth), personId, 'inlaw')
   }
 
   /**
@@ -200,6 +201,7 @@ export function useGraphData() {
     errorMessage,
     personNodes,
     familyUnitNodes,
+    graphContext,
     loadPeople,
     searchPeople,
     searchCenterCandidates,
@@ -238,7 +240,8 @@ function emptyGraph(viewMode, centerPersonId) {
     center_person_id: centerPersonId,
     nodes: [],
     edges: [],
-    warnings: []
+    warnings: [],
+    view_context: null
   }
 }
 

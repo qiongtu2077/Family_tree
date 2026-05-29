@@ -116,7 +116,7 @@ describe('useGraphData', () => {
   it('loads all five formal graph views with dedicated APIs', async () => {
     const personNode = { id: 'p1', type: 'person', name: '张三' }
     getMainlineGraph.mockResolvedValue({ view_mode: 'mainline', center_person_id: 'p1', nodes: [personNode], edges: [] })
-    getInlawGraph.mockResolvedValue({ view_mode: 'inlaw', center_person_id: 'p2', nodes: [personNode], edges: [] })
+    getInlawGraph.mockResolvedValue({ view_mode: 'inlaw', center_person_id: 'p1', view_context: { center_person_id: 'p1', spouse_id: 'p2' }, nodes: [personNode], edges: [] })
     getBridgeGraph.mockResolvedValue({ view_mode: 'bridge', center_person_id: 'p1', nodes: [personNode], edges: [] })
     getBranchGraph.mockResolvedValue({ view_mode: 'branch', nodes: [personNode], edges: [] })
     getBranchGraphByRoot.mockResolvedValue({ view_mode: 'branch', center_person_id: 'p1', nodes: [personNode], edges: [] })
@@ -137,6 +137,23 @@ describe('useGraphData', () => {
     expect(getBranchGraph).toHaveBeenCalledWith('f1', 5)
     expect(getOverviewGraph).toHaveBeenCalledWith('all', 300)
     expect(data.graph.value.view_mode).toBe('overview')
+  })
+
+  it('keeps original center when loading inlaw graph with spouse context', async () => {
+    const personNode = { id: 'p2', type: 'person', name: '李四' }
+    getInlawGraph.mockResolvedValue({
+      view_mode: 'inlaw',
+      center_person_id: 'p1',
+      view_context: { center_person_id: 'p1', spouse_id: 'p2' },
+      nodes: [personNode],
+      edges: []
+    })
+    const data = useGraphData()
+
+    await data.loadInlawGraph('p1', 'p2', 3)
+
+    expect(data.centerPersonId.value).toBe('p1')
+    expect(data.graphContext.value.spouse_id).toBe('p2')
   })
 
   it('stores error message and shows an empty graph when focus graph fails', async () => {

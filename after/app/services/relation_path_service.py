@@ -114,30 +114,62 @@ def _explain_relation(persons: list[GraphPerson], edges: list[GraphEdge]) -> str
     if spouse_steps:
         return "姻亲关系路径"
     if len(parent_steps) == len(edges):
-        return _explain_direct_blood_relation(persons, edges)
+        return _explain_blood_relation(persons, edges)
     return "亲缘关系路径"
 
 
-def _explain_direct_blood_relation(persons: list[GraphPerson], edges: list[GraphEdge]) -> str:
-    """解释只包含亲子边的直系血缘路径。"""
-    start = persons[0]
-    end = persons[-1]
-    steps = len(edges)
-    first_edge = edges[0]
+def _explain_blood_relation(persons: list[GraphPerson], edges: list[GraphEdge]) -> str:
+    """解释只包含亲子边的血缘路径。"""
+    directions = _parent_step_directions(persons, edges)
+    if not directions:
+        return "亲缘关系路径"
+    if all(direction == "down" for direction in directions):
+        return _ancestor_label(persons[0], len(directions))
+    if all(direction == "up" for direction in directions):
+        return _descendant_label(persons[0], len(directions))
+    if directions == ["up", "down"]:
+        return _sibling_label(persons[0])
+    return "血缘旁支关系路径"
 
-    if first_edge.source == start.id:
-        labels = {
-            1: "父亲" if start.gender == "M" else "母亲",
-            2: "祖父" if start.gender == "M" else "祖母",
-            3: "曾祖父" if start.gender == "M" else "曾祖母",
-            4: "高祖父" if start.gender == "M" else "高祖母",
-        }
-        return labels.get(steps, "远祖")
 
+def _parent_step_directions(persons: list[GraphPerson], edges: list[GraphEdge]) -> list[str]:
+    """判断路径中每条亲子边相对行进方向是上行还是下行。"""
+    directions = []
+    for index, edge in enumerate(edges):
+        current_person = persons[index]
+        next_person = persons[index + 1]
+        if edge.source == current_person.id and edge.target == next_person.id:
+            directions.append("down")
+            continue
+        if edge.source == next_person.id and edge.target == current_person.id:
+            directions.append("up")
+            continue
+        return []
+    return directions
+
+
+def _ancestor_label(person: GraphPerson, steps: int) -> str:
+    """返回起点人物作为终点祖先时的称谓。"""
     labels = {
-        1: "儿子" if start.gender == "M" else "女儿",
-        2: "孙子" if start.gender == "M" else "孙女",
-        3: "曾孙" if start.gender == "M" else "曾孙女",
-        4: "玄孙" if start.gender == "M" else "玄孙女",
+        1: "父亲" if person.gender == "M" else "母亲",
+        2: "祖父" if person.gender == "M" else "祖母",
+        3: "曾祖父" if person.gender == "M" else "曾祖母",
+        4: "高祖父" if person.gender == "M" else "高祖母",
     }
-    return labels.get(steps, f"{end.name} 的后代")
+    return labels.get(steps, "远祖")
+
+
+def _descendant_label(person: GraphPerson, steps: int) -> str:
+    """返回起点人物作为终点后代时的称谓。"""
+    labels = {
+        1: "儿子" if person.gender == "M" else "女儿",
+        2: "孙子" if person.gender == "M" else "孙女",
+        3: "曾孙" if person.gender == "M" else "曾孙女",
+        4: "玄孙" if person.gender == "M" else "玄孙女",
+    }
+    return labels.get(steps, "后代")
+
+
+def _sibling_label(person: GraphPerson) -> str:
+    """返回起点人物作为终点同胞时的称谓。"""
+    return "兄弟" if person.gender == "M" else "姐妹"

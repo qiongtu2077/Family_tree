@@ -51,6 +51,7 @@ export async function layoutGraph(graph) {
  */
 function buildFamilyModel(graph) {
   const viewMode = graph.view_mode || 'mainline'
+  const viewContext = graph.view_context || {}
   const persons = graph.nodes.filter(node => node.type === 'person')
   const branchCapsules = graph.nodes.filter(node => node.type === 'branchCapsule')
   const personMap = new Map(persons.map(person => [person.id, person]))
@@ -87,8 +88,9 @@ function buildFamilyModel(graph) {
   return {
     ...model,
     viewMode,
+    viewContext,
     branchCapsules,
-    centerPersonId: graph.center_person_id || null
+    centerPersonId: graph.center_person_id || viewContext.center_person_id || null
   }
 }
 
@@ -240,7 +242,36 @@ function layoutMainline(model) {
  * 创建姻亲谱系二维投影。
  */
 function layoutInlaw(model) {
-  return layoutMainline(model)
+  const spouseId = model.viewContext.spouse_id
+  const centerId = model.viewContext.center_person_id || model.centerPersonId
+  if (!spouseId || !centerId || !model.personMap.has(spouseId) || !model.personMap.has(centerId)) {
+    return layoutMainline({ ...model, centerPersonId: spouseId || model.centerPersonId })
+  }
+
+  const centralFamily = findContextFamily(model) || findFamilyByPartners(model.familyMap, centerId, spouseId)
+  const state = createLayoutState(model)
+  const partnerY = TOP_PADDING + LEVEL_GAP * 2
+  const partners = centralFamily?.partners?.length ? orderPartners(centralFamily.partners, centerId) : [centerId, spouseId]
+  const partnerPositions = placePartners(state, partners, 0, partnerY, centerId)
+  const familyCenter = getFamilyCenter(partnerPositions, 0)
+  let anchor = null
+  if (centralFamily) {
+    anchor = createFamilyAnchor(state, centralFamily.id, familyCenter.x, partnerY)
+    state.placedFamilies.add(centralFamily.id)
+    addSpouseEdge(state, centralFamily.id, partners)
+  } else {
+    addSpouseEdge(state, `inlaw:${centerId}:${spouseId}`, partners)
+  }
+
+  layoutInlawOriginFamily(state, spouseId, spouseId === partners[0] ? -1 : 1, partnerY)
+  if (centralFamily && anchor) {
+    layoutBridgeChildren(state, centralFamily, anchor, partnerY)
+  }
+  layoutFormalCapsules(state, PERSON_SIZE.width + FAMILY_GAP)
+  return {
+    nodes: state.nodes,
+    edges: state.edges
+  }
 }
 
 /**
@@ -550,11 +581,31 @@ function layoutFamilyChildrenOnLevel(state, family, primaryChildId, centerX, lev
  * 为桥接图选择中间婚姻家庭。
  */
 function findBridgeFamily(model) {
+  const contextFamily = findContextFamily(model)
+  if (contextFamily) return contextFamily
+
   const families = [...model.familyMap.values()]
     .filter(family => family.partners.length >= 2)
     .sort(compareFamilies)
   if (!model.centerPersonId) return families[0]
   return families.find(family => family.partners.includes(model.centerPersonId)) || families[0]
+}
+
+/**
+ * 根据后端投影上下文查找指定家庭单元。
+ */
+function findContextFamily(model) {
+  const familyUnitId = model.viewContext?.family_unit_id
+  if (!familyUnitId) return null
+  return model.familyMap.get(normalizeFamilyId(familyUnitId)) || model.familyMap.get(String(familyUnitId)) || null
+}
+
+/**
+ * 规范化家庭单元前端 ID。
+ */
+function normalizeFamilyId(familyUnitId) {
+  const value = String(familyUnitId || '')
+  return value.startsWith('family:') ? value : `family:${value}`
 }
 
 /**
@@ -592,6 +643,28 @@ function layoutBridgeSideFamily(state, personId, side, partnerY) {
   addSpouseEdge(state, parentFamilyId, family.partners)
 
   const childPositions = collectBridgeSiblingPositions(state, family, personId, side, personPosition)
+  addFamilyChildEdges(state, parentFamilyId, anchor, childPositions, parentLevel, hasSpouseLine(family))
+}
+
+/**
+ * 布局姻亲图中配偶的原生家庭。
+ */
+function layoutInlawOriginFamily(state, spouseId, side, partnerY) {
+  const parentFamilyId = state.parentFamiliesByChild.get(spouseId)?.[0]
+  const family = state.familyMap.get(parentFamilyId)
+  const spousePosition = state.positions.get(spouseId)
+  if (!family || !spousePosition || state.placedFamilies.has(parentFamilyId)) return
+
+  state.placedFamilies.add(parentFamilyId)
+  const parentY = partnerY - LEVEL_GAP
+  const parentLevel = (parentY - TOP_PADDING) / LEVEL_GAP
+  const parentCenterX = spousePosition.x + side * BRIDGE_PARENT_OFFSET
+  const parentPositions = placePartners(state, family.partners, parentCenterX, parentY)
+  const familyCenter = getFamilyCenter(parentPositions, parentCenterX)
+  const anchor = createFamilyAnchor(state, parentFamilyId, familyCenter.x, parentY)
+  addSpouseEdge(state, parentFamilyId, family.partners)
+
+  const childPositions = collectBridgeSiblingPositions(state, family, spouseId, side, spousePosition)
   addFamilyChildEdges(state, parentFamilyId, anchor, childPositions, parentLevel, hasSpouseLine(family))
 }
 

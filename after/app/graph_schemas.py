@@ -73,11 +73,23 @@ class GraphEdge(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class GraphViewContext(BaseModel):
+    """当前投影视图的业务上下文。"""
+
+    center_person_id: str | None = None
+    spouse_id: str | None = None
+    family_unit_id: str | None = None
+    root_type: Literal["person", "familyUnit"] | None = None
+    root_id: str | None = None
+    projection_reason: str | None = None
+
+
 class GraphViewResponse(BaseModel):
     """前端族谱视图数据。"""
 
     view_mode: ViewMode
     center_person_id: str | None = None
+    view_context: GraphViewContext | None = None
     nodes: list[GraphPerson | GraphFamilyUnit | GraphBranchCapsule]
     edges: list[GraphEdge]
     hidden_relation_count: int = 0

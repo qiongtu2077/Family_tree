@@ -260,4 +260,107 @@ describe('useGraphLayout', () => {
     expect(personIds).not.toContain('remote')
     expect(capsule.label).toContain('已折叠旁支')
   })
+
+  it('lays out inlaw view around spouse origin while keeping the center person on spouse level', async () => {
+    const data = await layoutGraph({
+      view_mode: 'inlaw',
+      center_person_id: 'center',
+      view_context: {
+        center_person_id: 'center',
+        spouse_id: 'spouse',
+        family_unit_id: 'marriage'
+      },
+      nodes: [
+        { id: 'center', type: 'person', name: '本家人物' },
+        { id: 'spouse-father', type: 'person', name: '配偶父亲' },
+        { id: 'spouse-mother', type: 'person', name: '配偶母亲' },
+        { id: 'spouse', type: 'person', name: '配偶' },
+        { id: 'spouse-sibling', type: 'person', name: '配偶同胞' },
+        { id: 'child', type: 'person', name: '共同子女' },
+        { id: 'family:origin', type: 'familyUnit' },
+        { id: 'family:marriage', type: 'familyUnit' }
+      ],
+      edges: [
+        { id: 'e1', source: 'spouse-father', target: 'family:origin', relation: 'partner' },
+        { id: 'e2', source: 'spouse-mother', target: 'family:origin', relation: 'partner' },
+        { id: 'e3', source: 'family:origin', target: 'spouse', relation: 'biological' },
+        { id: 'e4', source: 'family:origin', target: 'spouse-sibling', relation: 'biological' },
+        { id: 'e5', source: 'center', target: 'family:marriage', relation: 'partner' },
+        { id: 'e6', source: 'spouse', target: 'family:marriage', relation: 'partner' },
+        { id: 'e7', source: 'family:marriage', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const center = data.nodes.find(node => node.id === 'center')
+    const spouse = data.nodes.find(node => node.id === 'spouse')
+    const child = data.nodes.find(node => node.id === 'child')
+    const spouseFather = data.nodes.find(node => node.id === 'spouse-father')
+
+    expect(center.y).toBe(spouse.y)
+    expect(child.y).toBeGreaterThan(spouse.y)
+    expect(spouseFather.y).toBeLessThan(spouse.y)
+    expect(data.edges.some(edge => edge.type === 'polyline')).toBe(false)
+  })
+
+  it('uses bridge view_context family id when multiple couples are present', async () => {
+    const data = await layoutGraph({
+      view_mode: 'bridge',
+      center_person_id: 'husband',
+      view_context: { family_unit_id: 'selected' },
+      nodes: [
+        { id: 'husband', type: 'person', name: '丈夫' },
+        { id: 'wife', type: 'person', name: '妻子' },
+        { id: 'other', type: 'person', name: '其他人' },
+        { id: 'other-spouse', type: 'person', name: '其他配偶' },
+        { id: 'child', type: 'person', name: '孩子' },
+        { id: 'family:other', type: 'familyUnit' },
+        { id: 'family:selected', type: 'familyUnit' }
+      ],
+      edges: [
+        { id: 'e1', source: 'other', target: 'family:other', relation: 'partner' },
+        { id: 'e2', source: 'other-spouse', target: 'family:other', relation: 'partner' },
+        { id: 'e3', source: 'husband', target: 'family:selected', relation: 'partner' },
+        { id: 'e4', source: 'wife', target: 'family:selected', relation: 'partner' },
+        { id: 'e5', source: 'family:selected', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const husband = data.nodes.find(node => node.id === 'husband')
+    const wife = data.nodes.find(node => node.id === 'wife')
+    const child = data.nodes.find(node => node.id === 'child')
+    const other = data.nodes.find(node => node.id === 'other')
+
+    expect(husband.y).toBe(wife.y)
+    expect(child.y).toBeGreaterThan(husband.y)
+    expect(other).toBeUndefined()
+  })
+
+  it('renders explicit backend branch capsules as semantic capsule nodes', async () => {
+    const data = await layoutGraph({
+      view_mode: 'mainline',
+      center_person_id: 'child',
+      nodes: [
+        { id: 'father', type: 'person', name: '父亲' },
+        { id: 'child', type: 'person', name: '孩子' },
+        { id: 'family:f1', type: 'familyUnit' },
+        {
+          id: 'capsule:spouse-origin',
+          type: 'branchCapsule',
+          title: '配偶原生家庭 · 4 人',
+          target_view: 'inlaw',
+          owner_person_id: 'spouse'
+        }
+      ],
+      edges: [
+        { id: 'e1', source: 'father', target: 'family:f1', relation: 'partner' },
+        { id: 'e2', source: 'family:f1', target: 'child', relation: 'biological' }
+      ]
+    })
+
+    const capsule = data.nodes.find(node => node.nodeType === 'branchCapsule')
+
+    expect(capsule.label).toBe('配偶原生家庭 · 4 人')
+    expect(capsule.raw.target_view).toBe('inlaw')
+    expect(data.edges.every(edge => edge.source !== capsule.id && edge.target !== capsule.id)).toBe(true)
+  })
 })

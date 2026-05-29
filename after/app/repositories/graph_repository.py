@@ -23,8 +23,11 @@ class GraphRepository:
         descendant_depth: int,
     ) -> dict[str, Any] | None:
         """读取本家主线图所需的人物、家庭单元和关系。"""
-        generations = max(_safe_depth(ancestor_depth), _safe_depth(descendant_depth))
-        return self.get_focus_graph(person_id, generations)
+        return self._get_mainline_projection(
+            person_id,
+            _safe_depth(ancestor_depth),
+            _safe_depth(descendant_depth),
+        )
 
     def get_focus_graph(self, person_id: str, generations: int) -> dict[str, Any] | None:
         """读取中心人物谱系图所需的人物、家庭单元和关系。"""
@@ -66,9 +69,7 @@ class GraphRepository:
         if not self._are_spouses_or_partners(person_id, spouse_id):
             return None
 
-        raw_graph = self.get_focus_graph(spouse_id, _safe_depth(depth))
-        if not raw_graph:
-            return None
+        raw_graph = self._get_inlaw_projection(person_id, spouse_id, _safe_depth(depth))
         return raw_graph
 
     def get_bridge_graph(
@@ -83,11 +84,12 @@ class GraphRepository:
             return None
 
         bridge_depth = min(_safe_depth(depth), 4)
-        left_graph = self.get_focus_graph(person_id, bridge_depth)
-        right_graph = self.get_focus_graph(spouse_id, bridge_depth)
-        if not left_graph or not right_graph:
-            return None
-        return _merge_raw_graphs(left_graph, right_graph)
+        return self._get_bridge_projection(
+            person_id,
+            spouse_id,
+            bridge_depth,
+            family_unit_id=family_unit_id,
+        )
 
     def get_branch_graph(self, family_unit_id: str, depth: int) -> dict[str, Any] | None:
         """读取某个家庭单元向下展开的后代分支图。"""
@@ -128,14 +130,16 @@ class GraphRepository:
             for person in self._get_partners_for_family_units(family_unit_ids)
         ])
         person_ids = _unique_ids([*person_ids, *partner_ids])
-        persons = self._get_people_by_ids(person_ids)
-        family_units = self._get_family_units_by_ids(family_unit_ids)
-        edges = self._get_edges_for_scope(person_ids, family_unit_ids)
-        return {
-            "persons": persons,
-            "family_units": family_units,
-            **edges,
-        }
+        return self._build_raw_graph(
+            person_ids,
+            family_unit_ids,
+            view_context={
+                "family_unit_id": str(family_unit_id),
+                "root_type": "familyUnit",
+                "root_id": str(family_unit_id),
+                "projection_reason": "explicit_family_unit",
+            },
+        )
 
     def get_branch_graph_by_root(
         self,
@@ -151,9 +155,23 @@ class GraphRepository:
         if not root:
             return None
 
-        family_unit_id = self._get_primary_child_family_unit_id(root_id)
-        if family_unit_id:
-            return self.get_branch_graph(family_unit_id, depth)
+        branch_root = self._resolve_branch_root_for_person(root_id)
+        if branch_root["family_unit_id"]:
+            raw_graph = self.get_branch_graph(branch_root["family_unit_id"], depth)
+            if not raw_graph:
+                return None
+            raw_graph["view_context"] = {
+                "center_person_id": str(root_id),
+                "family_unit_id": branch_root["family_unit_id"],
+                "root_type": "person",
+                "root_id": str(root_id),
+                "projection_reason": branch_root["reason"],
+            }
+            raw_graph["warnings"] = _unique_strings([
+                *raw_graph.get("warnings", []),
+                branch_root["warning"],
+            ])
+            return raw_graph
 
         return {
             "persons": [root],
@@ -162,7 +180,13 @@ class GraphRepository:
             "child_edges": [],
             "parent_edges": [],
             "spouse_edges": [],
-            "warnings": ["该人物暂未录入后代分支"],
+            "warnings": [branch_root["warning"]],
+            "view_context": {
+                "center_person_id": str(root_id),
+                "root_type": "person",
+                "root_id": str(root_id),
+                "projection_reason": branch_root["reason"],
+            },
         }
 
     def get_overview_graph(self, scope: str, max_nodes: int) -> dict[str, Any] | None:
@@ -172,7 +196,7 @@ class GraphRepository:
 
         if normalized_scope.startswith("center:"):
             center_person_id = normalized_scope.replace("center:", "", 1)
-            return self.get_focus_graph(center_person_id, 4)
+            return self._get_nine_kinship_overview(center_person_id, limit)
 
         if normalized_scope not in {"all", "demo"}:
             return self._get_family_scope_overview(normalized_scope, limit)
@@ -287,6 +311,526 @@ class GraphRepository:
         LIMIT 200
         """
         return [_record_to_dict(record) for record in self.session.run(query)]
+
+    def _get_mainline_projection(
+        self,
+        person_id: str,
+        ancestor_depth: int,
+        descendant_depth: int,
+    ) -> dict[str, Any] | None:
+        """读取本家主线的收敛投影。"""
+        center = self._get_person_node(person_id)
+        if not center:
+            return None
+
+        ancestor_ids = self._get_direct_ancestor_person_ids(person_id, ancestor_depth)
+        descendant_ids = self._get_direct_descendant_person_ids(person_id, descendant_depth)
+        sibling_ids = self._get_sibling_person_ids(person_id)
+        blood_ids = _unique_ids([str(person_id), *ancestor_ids, *descendant_ids])
+        visible_seed_ids = _unique_ids([*blood_ids, *sibling_ids])
+        lineage_family_ids = _unique_ids([
+            *self._get_parent_family_unit_ids_for_people(visible_seed_ids),
+            *self._get_child_family_unit_ids_for_people(blood_ids),
+        ])
+        partner_ids = _unique_ids([
+            dict(person).get("personId")
+            for person in self._get_partners_for_family_units(lineage_family_ids)
+        ])
+        person_ids = _unique_ids([*visible_seed_ids, *partner_ids])
+        branch_capsules = [
+            self._build_branch_capsule(
+                "spouse_origin",
+                "配偶原生家庭",
+                owner_person_id=partner_id,
+                root_family_unit_id=self._get_first_parent_family_unit_id(partner_id),
+                relation_to_center="配偶原生家庭",
+                target_view="inlaw",
+            )
+            for partner_id in partner_ids
+            if partner_id not in blood_ids and self._get_first_parent_family_unit_id(partner_id)
+        ]
+        branch_capsules.extend(
+            self._build_branch_capsule(
+                "sibling_descendant",
+                "兄弟姐妹后代",
+                owner_person_id=sibling_id,
+                root_family_unit_id=family_unit_id,
+                relation_to_center="同胞后代",
+                target_view="branch",
+            )
+            for sibling_id in sibling_ids
+            for family_unit_id in [self._get_primary_child_family_unit_id(sibling_id)]
+            if family_unit_id
+        )
+        branch_capsules = [capsule for capsule in branch_capsules if capsule]
+        return self._build_raw_graph(
+            person_ids,
+            lineage_family_ids,
+            branch_capsules=branch_capsules,
+            hidden_relation_count=sum(capsule["person_count"] for capsule in branch_capsules),
+            view_context={
+                "center_person_id": str(person_id),
+                "root_type": "person",
+                "root_id": str(person_id),
+                "projection_reason": "mainline_projection",
+            },
+        )
+
+    def _get_inlaw_projection(
+        self,
+        person_id: str,
+        spouse_id: str,
+        depth: int,
+    ) -> dict[str, Any] | None:
+        """读取配偶原生家庭的姻亲投影。"""
+        spouse = self._get_person_node(spouse_id)
+        center = self._get_person_node(person_id)
+        if not spouse or not center:
+            return None
+
+        common_family_ids = self._get_common_family_unit_ids(person_id, spouse_id)
+        common_family_id = common_family_ids[0] if common_family_ids else None
+        ancestor_ids = self._get_direct_ancestor_person_ids(spouse_id, depth)
+        sibling_ids = self._get_sibling_person_ids(spouse_id)
+        origin_ids = _unique_ids([str(spouse_id), *ancestor_ids, *sibling_ids])
+        family_unit_ids = _unique_ids([
+            *self._get_parent_family_unit_ids_for_people(origin_ids),
+            *(common_family_ids[:1] if common_family_id else []),
+        ])
+        child_ids = self._get_child_person_ids_for_family_units([common_family_id]) if common_family_id else []
+        partner_ids = _unique_ids([
+            dict(person).get("personId")
+            for person in self._get_partners_for_family_units(family_unit_ids)
+        ])
+        person_ids = _unique_ids([str(person_id), *origin_ids, *child_ids, *partner_ids])
+        center_origin_family_id = self._get_first_parent_family_unit_id(person_id)
+        branch_capsules = []
+        if center_origin_family_id:
+            branch_capsules.append(self._build_branch_capsule(
+                "mainline_entry",
+                "本家入口",
+                owner_person_id=str(person_id),
+                root_family_unit_id=center_origin_family_id,
+                relation_to_center="当前人物本家",
+                target_view="mainline",
+            ))
+        branch_capsules.extend(
+            self._build_branch_capsule(
+                "inlaw_branch",
+                "姻亲旁支后代",
+                owner_person_id=sibling_id,
+                root_family_unit_id=family_unit_id,
+                relation_to_center="配偶同胞后代",
+                target_view="branch",
+            )
+            for sibling_id in sibling_ids
+            for family_unit_id in [self._get_primary_child_family_unit_id(sibling_id)]
+            if family_unit_id
+        )
+        branch_capsules = [capsule for capsule in branch_capsules if capsule]
+        return self._build_raw_graph(
+            person_ids,
+            family_unit_ids,
+            branch_capsules=branch_capsules,
+            hidden_relation_count=sum(capsule["person_count"] for capsule in branch_capsules),
+            view_context={
+                "center_person_id": str(person_id),
+                "spouse_id": str(spouse_id),
+                "family_unit_id": common_family_id,
+                "root_type": "person",
+                "root_id": str(spouse_id),
+                "projection_reason": "inlaw_origin_projection",
+            },
+        )
+
+    def _get_bridge_projection(
+        self,
+        person_id: str,
+        spouse_id: str,
+        depth: int,
+        family_unit_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """读取联姻桥接的双侧近亲投影。"""
+        common_family_ids = [str(family_unit_id)] if family_unit_id else self._get_common_family_unit_ids(person_id, spouse_id)
+        common_family_ids = _unique_ids(common_family_ids)
+        if len(common_family_ids) != 1:
+            return None
+
+        bridge_family_id = common_family_ids[0]
+        side_family_ids = _unique_ids([
+            *self._get_parent_family_unit_ids(person_id),
+            *self._get_parent_family_unit_ids(spouse_id),
+        ])
+        family_unit_ids = _unique_ids([bridge_family_id, *side_family_ids])
+        child_ids = self._get_child_person_ids_for_family_units([bridge_family_id])
+        partner_ids = _unique_ids([
+            dict(person).get("personId")
+            for person in self._get_partners_for_family_units(family_unit_ids)
+        ])
+        sibling_ids = self._get_child_person_ids_for_family_units(side_family_ids)
+        person_ids = _unique_ids([str(person_id), str(spouse_id), *child_ids, *partner_ids, *sibling_ids])
+        branch_capsules = []
+        if depth > 1:
+            branch_capsules.extend(
+                self._build_branch_capsule(
+                    "sibling_descendant",
+                    "两侧同胞后代",
+                    owner_person_id=sibling_id,
+                    root_family_unit_id=family_id,
+                    relation_to_center="同胞后代",
+                    target_view="branch",
+                )
+                for sibling_id in sibling_ids
+                if sibling_id not in {str(person_id), str(spouse_id)}
+                for family_id in [self._get_primary_child_family_unit_id(sibling_id)]
+                if family_id
+            )
+        branch_capsules = [capsule for capsule in branch_capsules if capsule]
+        return self._build_raw_graph(
+            person_ids,
+            family_unit_ids,
+            branch_capsules=branch_capsules,
+            hidden_relation_count=sum(capsule["person_count"] for capsule in branch_capsules),
+            view_context={
+                "center_person_id": str(person_id),
+                "spouse_id": str(spouse_id),
+                "family_unit_id": bridge_family_id,
+                "root_type": "familyUnit",
+                "root_id": bridge_family_id,
+                "projection_reason": "marriage_bridge_projection",
+            },
+        )
+
+    def _get_nine_kinship_overview(self, person_id: str, limit: int) -> dict[str, Any] | None:
+        """读取中心人物九族范围的全景索引投影。"""
+        center = self._get_person_node(person_id)
+        if not center:
+            return None
+
+        person_ids = self._get_nine_kinship_person_ids(person_id)
+        total_count = len(person_ids)
+        limited_person_ids = person_ids[:limit]
+        family_unit_ids = self._get_nine_kinship_family_unit_ids(limited_person_ids)
+        warnings = []
+        if total_count > limit:
+            warnings.append(f"已按上限显示 {limit} / {total_count} 人")
+        return self._build_raw_graph(
+            limited_person_ids,
+            family_unit_ids,
+            warnings=warnings,
+            hidden_relation_count=max(total_count - limit, 0),
+            view_context={
+                "center_person_id": str(person_id),
+                "root_type": "person",
+                "root_id": str(person_id),
+                "projection_reason": "nine_kinship_overview",
+            },
+        )
+
+    def _build_raw_graph(
+        self,
+        person_ids: list[str],
+        family_unit_ids: list[str],
+        *,
+        warnings: list[str] | None = None,
+        branch_capsules: list[dict[str, Any]] | None = None,
+        view_context: dict[str, Any] | None = None,
+        hidden_relation_count: int = 0,
+    ) -> dict[str, Any]:
+        """根据已收敛的 ID 范围组装原始图记录。"""
+        person_ids = _unique_ids(person_ids)
+        family_unit_ids = _unique_ids(family_unit_ids)
+        edges = self._get_edges_for_scope(person_ids, family_unit_ids)
+        return {
+            "persons": self._get_people_by_ids(person_ids),
+            "family_units": self._get_family_units_by_ids(family_unit_ids),
+            "branch_capsules": branch_capsules or [],
+            "hidden_relation_count": int(hidden_relation_count or 0),
+            "warnings": warnings or [],
+            "view_context": view_context,
+            **edges,
+        }
+
+    def _get_direct_ancestor_person_ids(self, person_id: str, depth: int) -> list[str]:
+        """读取上行直系祖先 ID。"""
+        query = f"""
+        MATCH path=(ancestor:Person)-[:PARENT_OF*1..{depth}]->(:Person {{personId: $person_id}})
+        UNWIND nodes(path) AS person
+        WITH DISTINCT person
+        WHERE person.personId <> $person_id
+        RETURN person.personId AS person_id
+        ORDER BY person.birthDate, person.name, person.personId
+        """
+        return _unique_ids([
+            record["person_id"]
+            for record in self.session.run(query, person_id=str(person_id))
+            if record["person_id"]
+        ])
+
+    def _get_direct_descendant_person_ids(self, person_id: str, depth: int) -> list[str]:
+        """读取下行直系后代 ID。"""
+        query = f"""
+        MATCH path=(:Person {{personId: $person_id}})-[:PARENT_OF*1..{depth}]->(descendant:Person)
+        UNWIND nodes(path) AS person
+        WITH DISTINCT person
+        WHERE person.personId <> $person_id
+        RETURN person.personId AS person_id
+        ORDER BY person.birthDate, person.name, person.personId
+        """
+        return _unique_ids([
+            record["person_id"]
+            for record in self.session.run(query, person_id=str(person_id))
+            if record["person_id"]
+        ])
+
+    def _get_sibling_person_ids(self, person_id: str) -> list[str]:
+        """读取同父母家庭中的兄弟姐妹 ID。"""
+        query = """
+        MATCH (:Person {personId: $person_id})<-[:PARENT_OF]-(parent:Person)-[:PARENT_OF]->(sibling:Person)
+        WHERE sibling.personId <> $person_id
+        WITH DISTINCT sibling
+        RETURN sibling.personId AS person_id
+        ORDER BY sibling.birthDate, sibling.name, sibling.personId
+        """
+        return _unique_ids([
+            record["person_id"]
+            for record in self.session.run(query, person_id=str(person_id))
+            if record["person_id"]
+        ])
+
+    def _get_parent_family_unit_ids(self, person_id: str) -> list[str]:
+        """读取人物作为子女所属的父母家庭单元 ID。"""
+        query = """
+        MATCH (unit:FamilyUnit)-[:HAS_CHILD]->(:Person {personId: $person_id})
+        RETURN DISTINCT unit.familyUnitId AS family_unit_id
+        ORDER BY unit.displayOrder, unit.familyUnitId
+        """
+        return _unique_ids([
+            record["family_unit_id"]
+            for record in self.session.run(query, person_id=str(person_id))
+            if record["family_unit_id"]
+        ])
+
+    def _get_first_parent_family_unit_id(self, person_id: str) -> str | None:
+        """读取人物首个父母家庭单元 ID。"""
+        family_unit_ids = self._get_parent_family_unit_ids(person_id)
+        return family_unit_ids[0] if family_unit_ids else None
+
+    def _get_parent_family_unit_ids_for_people(self, person_ids: list[str]) -> list[str]:
+        """读取一组人物作为子女接触的父母家庭单元 ID。"""
+        query = """
+        MATCH (unit:FamilyUnit)-[:HAS_CHILD]->(child:Person)
+        WHERE child.personId IN $person_ids
+        RETURN DISTINCT unit.familyUnitId AS family_unit_id
+        ORDER BY unit.displayOrder, unit.familyUnitId
+        """
+        return _unique_ids([
+            record["family_unit_id"]
+            for record in self.session.run(query, person_ids=person_ids)
+            if record["family_unit_id"]
+        ])
+
+    def _get_child_family_unit_ids_for_people(self, person_ids: list[str]) -> list[str]:
+        """读取一组人物作为伴侣且有子女的家庭单元 ID。"""
+        query = """
+        MATCH (person:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
+        WHERE person.personId IN $person_ids
+          AND EXISTS { MATCH (unit)-[:HAS_CHILD]->(:Person) }
+        RETURN DISTINCT unit.familyUnitId AS family_unit_id
+        ORDER BY unit.displayOrder, unit.familyUnitId
+        """
+        return _unique_ids([
+            record["family_unit_id"]
+            for record in self.session.run(query, person_ids=person_ids)
+            if record["family_unit_id"]
+        ])
+
+    def _get_common_family_unit_ids(self, person_id: str, spouse_id: str) -> list[str]:
+        """读取两个人共同作为伴侣进入的家庭单元 ID。"""
+        query = """
+        MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)<-[:PARTNER_IN]-(:Person {personId: $spouse_id})
+        RETURN DISTINCT unit.familyUnitId AS family_unit_id
+        ORDER BY unit.displayOrder, unit.familyUnitId
+        """
+        return _unique_ids([
+            record["family_unit_id"]
+            for record in self.session.run(
+                query,
+                person_id=str(person_id),
+                spouse_id=str(spouse_id),
+            )
+            if record["family_unit_id"]
+        ])
+
+    def _get_partner_person_ids_for_family_unit(self, family_unit_id: str) -> list[str]:
+        """读取家庭单元伴侣人物 ID。"""
+        query = """
+        MATCH (partner:Person)-[:PARTNER_IN]->(:FamilyUnit {familyUnitId: $family_unit_id})
+        RETURN DISTINCT partner.personId AS person_id
+        ORDER BY partner.birthDate, partner.name, partner.personId
+        """
+        return _unique_ids([
+            record["person_id"]
+            for record in self.session.run(query, family_unit_id=str(family_unit_id))
+            if record["person_id"]
+        ])
+
+    def _get_parent_family_chain(self, person_id: str, max_depth: int = 4) -> list[str]:
+        """读取能覆盖人物的父母到祖先家庭单元链。"""
+        chain = []
+        frontier_ids = [str(person_id)]
+        seen_people = {str(person_id)}
+        for _ in range(max_depth):
+            parent_family_ids = _unique_ids([
+                family_unit_id
+                for current_person_id in frontier_ids
+                for family_unit_id in self._get_parent_family_unit_ids(current_person_id)
+                if family_unit_id not in chain
+            ])
+            if not parent_family_ids:
+                break
+            parent_family_id = parent_family_ids[0]
+            chain.append(parent_family_id)
+            parent_ids = [
+                parent_id
+                for parent_id in self._get_partner_person_ids_for_family_unit(parent_family_id)
+                if parent_id not in seen_people
+            ]
+            if not parent_ids:
+                break
+            seen_people.update(parent_ids)
+            frontier_ids = parent_ids
+        return chain
+
+    def _resolve_branch_root_for_person(self, person_id: str) -> dict[str, str | None]:
+        """解析人物后代分支应该使用的根家庭单元。"""
+        own_family_id = self._get_primary_child_family_unit_id(person_id)
+        if own_family_id:
+            return {
+                "family_unit_id": own_family_id,
+                "reason": "own_descendant_branch",
+                "warning": "已从本人家庭展开",
+            }
+
+        parent_chain = self._get_parent_family_chain(person_id, max_depth=4)
+        if parent_chain:
+            return {
+                "family_unit_id": parent_chain[-1],
+                "reason": "ancestor_family_fallback",
+                "warning": "该人物暂无个人后代，已回退到父母或祖先家庭分支",
+            }
+
+        return {
+            "family_unit_id": None,
+            "reason": "isolated_person",
+            "warning": "未找到可展开家庭单元，仅显示本人",
+        }
+
+    def _get_nine_kinship_person_ids(self, person_id: str) -> list[str]:
+        """读取中心人物九族候选人物 ID。"""
+        direct_ids = _unique_ids([
+            str(person_id),
+            *self._get_direct_ancestor_person_ids(person_id, 4),
+            *self._get_direct_descendant_person_ids(person_id, 4),
+        ])
+        family_unit_ids = self._get_nine_kinship_family_unit_ids(direct_ids)
+        partner_ids = _unique_ids([
+            dict(person).get("personId")
+            for person in self._get_partners_for_family_units(family_unit_ids)
+        ])
+        child_ids = self._get_child_person_ids_for_family_units(family_unit_ids)
+        return _unique_ids([*direct_ids, *partner_ids, *child_ids])
+
+    def _get_nine_kinship_family_unit_ids(self, person_ids: list[str]) -> list[str]:
+        """读取九族候选人物必要家庭单元 ID。"""
+        return _unique_ids([
+            *self._get_parent_family_unit_ids_for_people(person_ids),
+            *self._get_child_family_unit_ids_for_people(person_ids),
+        ])
+
+    def _build_branch_capsule(
+        self,
+        capsule_type: str,
+        title: str,
+        *,
+        owner_person_id: str | None = None,
+        root_family_unit_id: str | None = None,
+        relation_to_center: str = "旁支",
+        target_view: str = "branch",
+    ) -> dict[str, Any] | None:
+        """构造折叠分支胶囊摘要。"""
+        if not root_family_unit_id and target_view == "branch":
+            return None
+        person_count = self._count_family_descendants(root_family_unit_id, 4) if root_family_unit_id else 0
+        if capsule_type in {"spouse_origin", "mainline_entry"} and owner_person_id:
+            person_count = max(person_count, self._count_spouse_origin_family(owner_person_id))
+        return {
+            "id": f"capsule:{capsule_type}:{owner_person_id or 'none'}:{root_family_unit_id or 'none'}",
+            "title": title if person_count <= 0 else f"{title} · {person_count} 人",
+            "owner_person_id": owner_person_id,
+            "root_family_unit_id": root_family_unit_id,
+            "relation_to_center": relation_to_center,
+            "person_count": person_count,
+            "generation_count": self._count_family_descendant_generations(root_family_unit_id, 4) if root_family_unit_id else 0,
+            "preview_names": self._preview_family_descendants(root_family_unit_id, 3) if root_family_unit_id else [],
+            "target_view": target_view,
+        }
+
+    def _count_family_descendants(self, family_unit_id: str | None, max_depth: int) -> int:
+        """统计家庭单元下方可折叠后代人数。"""
+        if not family_unit_id:
+            return 0
+        descendant_ids = []
+        frontier_unit_ids = [str(family_unit_id)]
+        for _ in range(max_depth):
+            child_ids = self._get_child_person_ids_for_family_units(frontier_unit_ids)
+            new_child_ids = [child_id for child_id in child_ids if child_id not in descendant_ids]
+            if not new_child_ids:
+                break
+            descendant_ids = _unique_ids([*descendant_ids, *new_child_ids])
+            frontier_unit_ids = self._get_child_family_unit_ids_for_people(new_child_ids)
+            if not frontier_unit_ids:
+                break
+        return len(descendant_ids)
+
+    def _count_family_descendant_generations(self, family_unit_id: str | None, max_depth: int) -> int:
+        """统计家庭单元折叠后代层数。"""
+        if not family_unit_id:
+            return 0
+        generation_count = 0
+        frontier_unit_ids = [str(family_unit_id)]
+        seen_person_ids = []
+        for _ in range(max_depth):
+            child_ids = self._get_child_person_ids_for_family_units(frontier_unit_ids)
+            new_child_ids = [child_id for child_id in child_ids if child_id not in seen_person_ids]
+            if not new_child_ids:
+                break
+            generation_count += 1
+            seen_person_ids = _unique_ids([*seen_person_ids, *new_child_ids])
+            frontier_unit_ids = self._get_child_family_unit_ids_for_people(new_child_ids)
+            if not frontier_unit_ids:
+                break
+        return generation_count
+
+    def _preview_family_descendants(self, family_unit_id: str | None, limit: int) -> list[str]:
+        """预览家庭单元下方的前几个后代姓名。"""
+        if not family_unit_id:
+            return []
+        child_ids = self._get_child_person_ids_for_family_units([str(family_unit_id)])[:limit]
+        return [
+            str(dict(person).get("name"))
+            for person in self._get_people_by_ids(child_ids)
+            if dict(person).get("name")
+        ]
+
+    def _count_spouse_origin_family(self, spouse_id: str) -> int:
+        """统计人物原生家庭可折叠人数。"""
+        parent_family_id = self._get_first_parent_family_unit_id(spouse_id)
+        if not parent_family_id:
+            return 0
+        partner_count = len(self._get_partner_person_ids_for_family_unit(parent_family_id))
+        descendant_count = self._count_family_descendants(parent_family_id, 4)
+        return partner_count + descendant_count
 
     def _get_person_node(self, person_id: str):
         """读取单个人物节点。"""
@@ -726,6 +1270,17 @@ def _record_to_dict(record) -> dict[str, Any]:
 
 def _unique_ids(values: list[str]) -> list[str]:
     """保留顺序去重 ID 列表。"""
+    seen = set()
+    result = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    """保留顺序去重字符串列表。"""
     seen = set()
     result = []
     for value in values:
