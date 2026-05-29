@@ -248,14 +248,24 @@ async function openAdminPanel() {
 }
 
 /**
- * 在全景中切换为中心九族范围。
+ * 在全景中切换到中心人物九族关系图。
  */
 async function showCenterScope() {
   if (!data.centerPersonId.value) {
     openCenterModal()
     return
   }
-  await data.loadOverviewGraph(`center:${data.centerPersonId.value}`, 300)
+  const centerPerson = data.centerContext.value?.person ||
+    data.people.value.find(person => person.id === data.centerPersonId.value) ||
+    { id: data.centerPersonId.value }
+  interactions.selectPerson(centerPerson)
+
+  // “九族”需要关系线，不继续使用全景索引散点布局。
+  if (interactions.selectedView.value !== 'mainline') {
+    isRevertingView = true
+    interactions.selectedView.value = 'mainline'
+  }
+  await data.loadMainlineGraph(data.centerPersonId.value, 4, 4)
 }
 
 /**
@@ -294,10 +304,12 @@ async function switchGraphView(view, previousView) {
 
   try {
     if (view === 'mainline') {
+      interactions.selectPerson(data.centerContext.value?.person || null)
       await data.loadMainlineGraph(centerId)
       return
     }
     if (view === 'overview') {
+      interactions.clearSelection()
       await data.loadOverviewGraph('all', 300)
       return
     }

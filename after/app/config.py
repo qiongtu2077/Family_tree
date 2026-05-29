@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     app_name: str = "族谱查询系统 API"
     debug: bool = False
     database_url: str = "sqlite:///./family_tree.db"
-    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
     neo4j_database: str = "neo4j"

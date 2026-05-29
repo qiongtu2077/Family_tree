@@ -16,11 +16,6 @@ import {
   getOverviewGraph,
   getRelationPath
 } from '../api/graph'
-import {
-  getFallbackCenterContext,
-  getFallbackGraph,
-  getFallbackPeople
-} from '../api/demoGraphFallback'
 import { getPersons, searchPersons } from '../api/persons'
 
 /**
@@ -48,7 +43,7 @@ export function useGraphData() {
       return people.value
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
-      people.value = getFallbackPeople()
+      people.value = []
       return people.value
     }
   }
@@ -84,8 +79,8 @@ export function useGraphData() {
       return centerContext.value
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
-      centerContext.value = buildFallbackCenterContext(personId, people.value)
-      centerPersonId.value = centerContext.value?.person?.id || personId
+      centerContext.value = null
+      centerPersonId.value = personId
       return centerContext.value
     }
   }
@@ -95,40 +90,30 @@ export function useGraphData() {
    */
   async function loadGraph(
     loader,
-    fallbackCenterPersonId = null,
-    fallbackViewMode = 'mainline',
-    fallbackOptions = {}
+    expectedCenterPersonId = null,
+    emptyViewMode = 'mainline'
   ) {
     isLoading.value = true
     errorMessage.value = ''
     try {
       const data = await loader()
       if (!isRenderableGraph(data)) {
-        errorMessage.value = '接口返回空图谱，已显示本地演示数据'
-        return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child', fallbackOptions)
+        errorMessage.value = '接口返回空图谱，请先初始化 Neo4j 测试数据'
+        graph.value = emptyGraph(emptyViewMode, expectedCenterPersonId)
+        centerPersonId.value = expectedCenterPersonId
+        return graph.value
       }
       graph.value = data
-      centerPersonId.value = data.center_person_id || fallbackCenterPersonId
+      centerPersonId.value = data.center_person_id || expectedCenterPersonId
       return data
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
-      return useFallbackGraph(fallbackViewMode, fallbackCenterPersonId || 'demo:child', fallbackOptions)
+      graph.value = emptyGraph(emptyViewMode, expectedCenterPersonId)
+      centerPersonId.value = expectedCenterPersonId
+      return graph.value
     } finally {
       isLoading.value = false
     }
-  }
-
-  /**
-   * 立即切换到本地演示图谱，避免真实库不可用时画布空白。
-   */
-  function useFallbackGraph(viewMode = 'mainline', fallbackPersonId = 'demo:child', options = {}) {
-    const fallbackGraph = getFallbackGraph(viewMode, fallbackPersonId, options)
-    graph.value = fallbackGraph
-    centerPersonId.value = fallbackGraph.center_person_id || fallbackPersonId
-    if (!people.value.length) people.value = getFallbackPeople()
-    centerContext.value = getFallbackCenterContext(centerPersonId.value) ||
-      buildFallbackCenterContext(centerPersonId.value, people.value)
-    return fallbackGraph
   }
 
   /**
@@ -177,8 +162,7 @@ export function useGraphData() {
     return loadGraph(
       loader,
       rootType === 'person' ? rootId : centerPersonId.value,
-      'branch',
-      { rootType, rootId, depth }
+      'branch'
     )
   }
 
@@ -227,8 +211,7 @@ export function useGraphData() {
     loadBranchGraph,
     loadOverviewGraph,
     loadRelationPath,
-    loadIssues,
-    useFallbackGraph
+    loadIssues
   }
 }
 
@@ -247,25 +230,15 @@ function isRenderableGraph(data) {
 }
 
 /**
- * 构造本地演示中心上下文，供离线兜底和首次选择使用。
+ * 返回空图谱错误态，不再使用本地临时族谱数据兜底。
  */
-function buildFallbackCenterContext(personId, people) {
-  const person = people.find(item => item.id === personId) || people[0]
-  if (!person) return null
+function emptyGraph(viewMode, centerPersonId) {
   return {
-    person,
-    available_spouses: [],
-    available_family_units: [],
-    default_mainline_depth: 3,
-    nine_kinship_summary: {
-      ancestor_depth: 4,
-      descendant_depth: 4,
-      ancestor_count: 0,
-      descendant_count: 0,
-      visible_person_count: people.length,
-      hidden_relation_count: 0
-    },
-    warnings: ['当前使用本地演示中心人物上下文']
+    view_mode: viewMode,
+    center_person_id: centerPersonId,
+    nodes: [],
+    edges: [],
+    warnings: []
   }
 }
 

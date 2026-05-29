@@ -100,12 +100,13 @@ describe('useGraphData', () => {
   })
 
   it('loads all five formal graph views with dedicated APIs', async () => {
-    getMainlineGraph.mockResolvedValue({ view_mode: 'mainline', center_person_id: 'p1', nodes: [], edges: [] })
-    getInlawGraph.mockResolvedValue({ view_mode: 'inlaw', center_person_id: 'p2', nodes: [], edges: [] })
-    getBridgeGraph.mockResolvedValue({ view_mode: 'bridge', center_person_id: 'p1', nodes: [], edges: [] })
-    getBranchGraph.mockResolvedValue({ view_mode: 'branch', nodes: [], edges: [] })
-    getBranchGraphByRoot.mockResolvedValue({ view_mode: 'branch', center_person_id: 'p1', nodes: [], edges: [] })
-    getOverviewGraph.mockResolvedValue({ view_mode: 'overview', nodes: [], edges: [] })
+    const personNode = { id: 'p1', type: 'person', name: '张三' }
+    getMainlineGraph.mockResolvedValue({ view_mode: 'mainline', center_person_id: 'p1', nodes: [personNode], edges: [] })
+    getInlawGraph.mockResolvedValue({ view_mode: 'inlaw', center_person_id: 'p2', nodes: [personNode], edges: [] })
+    getBridgeGraph.mockResolvedValue({ view_mode: 'bridge', center_person_id: 'p1', nodes: [personNode], edges: [] })
+    getBranchGraph.mockResolvedValue({ view_mode: 'branch', nodes: [personNode], edges: [] })
+    getBranchGraphByRoot.mockResolvedValue({ view_mode: 'branch', center_person_id: 'p1', nodes: [personNode], edges: [] })
+    getOverviewGraph.mockResolvedValue({ view_mode: 'overview', nodes: [personNode], edges: [] })
     const data = useGraphData()
 
     await data.loadMainlineGraph('p1', 2, 4)
@@ -124,7 +125,7 @@ describe('useGraphData', () => {
     expect(data.graph.value.view_mode).toBe('overview')
   })
 
-  it('stores error message when focus graph fails', async () => {
+  it('stores error message and shows an empty graph when focus graph fails', async () => {
     getFocusGraph.mockRejectedValue({
       response: { data: { detail: '人物不存在' } }
     })
@@ -134,54 +135,23 @@ describe('useGraphData', () => {
 
     expect(data.errorMessage.value).toBe('人物不存在')
     expect(data.isLoading.value).toBe(false)
-    expect(graph.nodes.length).toBeGreaterThan(0)
-    expect(graph.warnings[0]).toContain('Neo4j 暂不可用')
+    expect(graph.view_mode).toBe('mainline')
+    expect(graph.center_person_id).toBe('missing')
+    expect(graph.nodes).toEqual([])
   })
 
-  it('falls back when an API returns an empty graph', async () => {
+  it('keeps empty graph state when an API returns no renderable nodes', async () => {
     getMainlineGraph.mockResolvedValue({ view_mode: 'mainline', center_person_id: 'p1', nodes: [], edges: [] })
     const data = useGraphData()
 
     const graph = await data.loadMainlineGraph('p1')
 
-    expect(data.errorMessage.value).toBe('接口返回空图谱，已显示本地演示数据')
-    expect(graph.nodes.length).toBeGreaterThan(0)
-    expect(graph.center_person_id).toBe('demo:child')
+    expect(data.errorMessage.value).toBe('接口返回空图谱，请先初始化 Neo4j 测试数据')
+    expect(graph.nodes).toEqual([])
+    expect(graph.center_person_id).toBe('p1')
   })
 
-  it('can warm up the graph with local demo data immediately', () => {
-    const data = useGraphData()
-
-    const graph = data.useFallbackGraph('mainline', 'demo:child')
-
-    expect(graph.nodes.length).toBeGreaterThan(0)
-    expect(data.graph.value.warnings[0]).toContain('Neo4j 暂不可用')
-    expect(data.people.value.length).toBeGreaterThan(40)
-  })
-
-  it('uses selected root family when branch API falls back', async () => {
-    getBranchGraph.mockRejectedValue(new Error('timeout of 5000ms exceeded'))
-    const data = useGraphData()
-    data.centerPersonId.value = 'demo:paternal-great-grandfather'
-
-    const graph = await data.loadBranchGraph(
-      'familyUnit',
-      'demo:unit-paternal-great-grandparents',
-      5
-    )
-    const personIds = graph.nodes
-      .filter(node => node.type === 'person')
-      .map(node => node.id)
-
-    expect(data.errorMessage.value).toBe('timeout of 5000ms exceeded')
-    expect(getBranchGraph).toHaveBeenCalledWith('demo:unit-paternal-great-grandparents', 5)
-    expect(personIds).toContain('demo:paternal-great-grandfather')
-    expect(personIds).toContain('demo:child')
-    expect(personIds).not.toContain('demo:maternal-li-great-grandfather')
-    expect(personIds.length).toBeLessThan(data.people.value.length)
-  })
-
-  it('falls back to local demo people when Neo4j is unavailable', async () => {
+  it('does not create local people when Neo4j is unavailable', async () => {
     getPersons.mockRejectedValue({
       response: { data: { detail: 'Neo4j 服务不可用' } }
     })
@@ -189,7 +159,7 @@ describe('useGraphData', () => {
 
     const people = await data.loadPeople()
 
-    expect(people.length).toBeGreaterThan(40)
+    expect(people).toEqual([])
     expect(data.errorMessage.value).toBe('Neo4j 服务不可用')
   })
 
