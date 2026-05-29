@@ -65,13 +65,20 @@ const lifeYears = computed(() => {
 
 <style scoped>
 .detail-drawer {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  bottom: 18px;
+  z-index: 5;
   width: 360px;
   padding: 24px;
   overflow-y: auto;
   color: #f0f0f0;
-  background: rgba(25, 25, 25, 0.96);
-  border-left: 1px solid rgba(255, 250, 0, 0.18);
+  background: rgba(25, 25, 25, 0.9);
+  border: 1px solid rgba(255, 250, 0, 0.18);
+  border-radius: 26px;
   box-shadow: -18px 0 50px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(16px);
   animation: drawerIn 0.24s ease both;
 }
 
@@ -183,9 +190,11 @@ section p {
 
 @media (max-width: 1040px) {
   .detail-drawer {
-    width: 100%;
-    border-left: 0;
-    border-top: 1px solid rgba(255, 250, 0, 0.18);
+    position: fixed;
+    inset: auto 12px 12px 12px;
+    width: auto;
+    max-height: min(72vh, 620px);
+    border-left: 1px solid rgba(255, 250, 0, 0.18);
   }
 }
 </style>

@@ -151,7 +151,7 @@ const viewHints = {
 
 const currentViewLabel = computed(() => viewLabels[interactions.selectedView.value] || '本家主线图')
 const currentViewHint = computed(() => viewHints[interactions.selectedView.value] || viewHints.mainline)
-const centerPersonName = computed(() => data.centerContext.value?.person?.name || '')
+const centerPersonName = computed(() => getCenterPersonFallback()?.name || '')
 const requiresCenterPerson = computed(() => interactions.selectedView.value !== 'overview')
 const visibleGraph = computed(() => {
   if (requiresCenterPerson.value && !data.centerPersonId.value) return emptyGraph()
@@ -304,7 +304,7 @@ async function switchGraphView(view, previousView) {
 
   try {
     if (view === 'mainline') {
-      interactions.selectPerson(data.centerContext.value?.person || null)
+      interactions.selectPerson(getCenterPersonFallback())
       await data.loadMainlineGraph(centerId)
       return
     }
@@ -337,7 +337,7 @@ async function applyCenterPerson(person, targetView = 'mainline') {
   selectedFamilyOption.value = null
   selectedParameterOption.value = null
   await data.loadCenterContext(personId)
-  interactions.selectPerson(data.centerContext.value?.person || person)
+  interactions.selectPerson(data.centerContext.value?.person || getCenterPersonFallback() || person)
 
   if (targetView !== interactions.selectedView.value) {
     isRevertingView = true
@@ -441,6 +441,19 @@ function keepPreviousView(previousView, message) {
 }
 
 /**
+ * 从已加载数据中兜底读取中心人物，避免上下文接口短暂失败时清空界面状态。
+ */
+function getCenterPersonFallback() {
+  const centerId = data.centerContext.value?.person?.id || data.centerPersonId.value
+  if (!centerId) return null
+  if (data.centerContext.value?.person) return data.centerContext.value.person
+  if (interactions.selectedPerson.value?.id === centerId) return interactions.selectedPerson.value
+  return data.graph.value.nodes.find(node => node.type === 'person' && node.id === centerId) ||
+    data.people.value.find(person => person.id === centerId) ||
+    null
+}
+
+/**
  * 兼容旧账号绑定的 SQL 自增 ID。
  */
 function normalizePersonId(personId) {
@@ -475,10 +488,11 @@ function emptyGraph() {
   min-height: 0;
   height: calc(100vh - 67px);
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
   gap: 14px;
   padding: 18px;
   overflow: hidden;
+  position: relative;
 }
 
 .left-rail {

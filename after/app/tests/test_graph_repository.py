@@ -180,11 +180,13 @@ class CenterContextSession:
 
     def __init__(self):
         """初始化中心人物、配偶和家庭单元。"""
+        self.queries = []
         self.center = FakeNode(["Person"], {"personId": "center", "name": "中心"})
         self.spouse = FakeNode(["Person"], {"personId": "spouse", "name": "配偶"})
 
     def run(self, query, **params):
         """按查询形状返回中心上下文记录。"""
+        self.queries.append(query)
         compact_query = " ".join(query.split())
         if "MATCH (person:Person {personId: $person_id}) RETURN person LIMIT 1" in compact_query:
             return FakeResult([{"person": self.center}])
@@ -219,16 +221,20 @@ class CenterContextSession:
 
 def test_center_context_queries_real_person_and_options():
     """中心上下文应基于真实人物返回配偶、家庭和九族摘要。"""
-    repository = GraphRepository(CenterContextSession())
+    session = CenterContextSession()
+    repository = GraphRepository(session)
 
     context = repository.get_center_context("center")
     candidates = repository.get_center_candidates("中", 20)
+    query_text = "\n".join(session.queries)
 
     assert dict(context["person"])["personId"] == "center"
     assert context["available_spouses"][0]["family_unit_id"] == "f1"
     assert context["available_family_units"][0]["child_count"] == 2
     assert context["nine_kinship_summary"]["visible_person_count"] == 6
     assert dict(candidates[0])["personId"] == "center"
+    assert "WITH spouse, unit, count(DISTINCT child) AS child_count" in query_text
+    assert "ORDER BY unit.displayOrder, spouse.name, spouse.personId" not in query_text
 
 
 def test_overview_center_scope_uses_focus_projection():

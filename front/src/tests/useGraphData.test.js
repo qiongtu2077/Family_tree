@@ -99,6 +99,20 @@ describe('useGraphData', () => {
     expect(data.centerContext.value.available_spouses[0].family_unit_id).toBe('f1')
   })
 
+  it('keeps requested center id when center context fails', async () => {
+    getCenterContext.mockRejectedValue({
+      response: { data: { detail: 'Neo4j 服务不可用' } }
+    })
+    const data = useGraphData()
+
+    const context = await data.loadCenterContext('p1')
+
+    expect(context).toBeNull()
+    expect(data.centerContext.value).toBeNull()
+    expect(data.centerPersonId.value).toBe('p1')
+    expect(data.errorMessage.value).toBe('Neo4j 服务不可用')
+  })
+
   it('loads all five formal graph views with dedicated APIs', async () => {
     const personNode = { id: 'p1', type: 'person', name: '张三' }
     getMainlineGraph.mockResolvedValue({ view_mode: 'mainline', center_person_id: 'p1', nodes: [personNode], edges: [] })

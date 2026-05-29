@@ -493,10 +493,15 @@ class GraphRepository:
         MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)<-[:PARTNER_IN]-(spouse:Person)
         WHERE spouse.personId <> $person_id
         OPTIONAL MATCH (unit)-[:HAS_CHILD]->(child:Person)
+        WITH spouse, unit, count(DISTINCT child) AS child_count
+        WITH spouse,
+             unit.familyUnitId AS family_unit_id,
+             child_count,
+             coalesce(unit.displayOrder, 0) AS display_order
+        ORDER BY display_order, spouse.name, spouse.personId
         RETURN spouse AS person,
-               unit.familyUnitId AS family_unit_id,
-               count(DISTINCT child) AS child_count
-        ORDER BY unit.displayOrder, spouse.name, spouse.personId
+               family_unit_id,
+               child_count
         """
         return [
             {
@@ -517,13 +522,20 @@ class GraphRepository:
              collect(DISTINCT partner.personId) AS spouse_ids,
              collect(DISTINCT partner.name) AS spouse_names,
              count(DISTINCT child) AS child_count
-        RETURN unit.familyUnitId AS family_unit_id,
-               coalesce(unit.type, 'marriage') AS family_type,
-               coalesce(unit.label, '家庭单元') AS label,
+        WITH unit.familyUnitId AS family_unit_id,
+             coalesce(unit.type, 'marriage') AS family_type,
+             coalesce(unit.label, '家庭单元') AS label,
+             spouse_ids,
+             spouse_names,
+             child_count,
+             coalesce(unit.displayOrder, 0) AS display_order
+        ORDER BY display_order, family_unit_id
+        RETURN family_unit_id,
+               family_type,
+               label,
                spouse_ids,
                spouse_names,
                child_count
-        ORDER BY unit.displayOrder, unit.familyUnitId
         """
         return [
             {
