@@ -171,6 +171,8 @@ def test_branch_graph_uses_layered_family_unit_expansion():
     assert family_unit_ids == {"f1", "f2"}
     assert "HAS_CHILD|PARENT_OF" not in query_text
     assert "collect(DISTINCT unit) + [root]" not in query_text
+    assert "WITH DISTINCT child" in query_text
+    assert "RETURN DISTINCT child.personId AS person_id" not in query_text
 
 
 class CenterContextSession:

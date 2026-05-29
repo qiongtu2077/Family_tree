@@ -436,8 +436,9 @@ class GraphRepository:
         query = """
         MATCH (unit:FamilyUnit)-[:HAS_CHILD]->(child:Person)
         WHERE unit.familyUnitId IN $family_unit_ids
-        RETURN DISTINCT child.personId AS person_id
+        WITH DISTINCT child
         ORDER BY child.birthDate, child.name, child.personId
+        RETURN child.personId AS person_id
         """
         return _unique_ids([
             record["person_id"]

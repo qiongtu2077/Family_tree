@@ -475,16 +475,22 @@ function emptyGraph() {
   min-height: 0;
   height: calc(100vh - 67px);
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) auto;
-  gap: 18px;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) auto;
+  gap: 14px;
   padding: 18px;
   overflow: hidden;
 }
 
 .left-rail {
+  min-width: 0;
+  max-height: 100%;
   display: grid;
   align-content: start;
   gap: 14px;
+  overflow-y: auto;
+  padding-right: 2px;
+  position: relative;
+  z-index: 2;
 }
 
 .status-card,
@@ -499,6 +505,8 @@ function emptyGraph() {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(10px);
   animation: cardRise 0.5s ease both;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .status-card span {
@@ -522,6 +530,8 @@ function emptyGraph() {
   color: #ff7b86;
   border-color: rgba(255, 71, 87, 0.28);
   background: rgba(255, 71, 87, 0.1);
+  max-height: 220px;
+  overflow: auto;
 }
 
 .search-results {
@@ -557,6 +567,10 @@ function emptyGraph() {
 
 .canvas-area {
   min-width: 0;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  z-index: 1;
   animation: canvasReveal 0.7s cubic-bezier(.2,.8,.2,1) both;
 }
 
