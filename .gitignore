@@ -50,8 +50,12 @@ Thumbs.db
 # 构建输出
 front/dist/
 front/coverage/
+front/e2e/artifacts/
+front/src/tests/测试/artifacts/
 
 # 临时文件
 *.tmp
 *.temp
+.runtime/
+*.dump
 

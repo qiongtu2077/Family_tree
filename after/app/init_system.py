@@ -1,11 +1,9 @@
 """
 系统初始化脚本
-创建 SQLAlchemy 表、演示账号、Neo4j 约束和示例族谱。
+创建 PostgreSQL 表、演示账号和示例族谱。
 """
 from .database import Base, SessionLocal, engine
-from .config import get_settings
 from .models import User
-from .neo4j import get_driver
 from .repositories.person_repository import PersonRepository
 from .routers.auth import hash_password
 from .services.seed_service import SeedService
@@ -43,16 +41,17 @@ def init_sql_accounts() -> dict[str, list[str]]:
     return {"created": created, "updated": updated}
 
 
-def init_neo4j_demo_family() -> dict[str, int]:
-    """初始化 Neo4j 示例族谱。"""
-    with get_driver().session(database=get_settings().neo4j_database) as session:
+def init_demo_family() -> dict[str, int]:
+    """在同一 PostgreSQL 事务中初始化示例族谱。"""
+    Base.metadata.create_all(bind=engine)
+    with SessionLocal.begin() as session:
         return SeedService(PersonRepository(session)).seed_demo_family()
 
 
 def main() -> None:
     """执行完整初始化流程。"""
     account_result = init_sql_accounts()
-    family_result = init_neo4j_demo_family()
+    family_result = init_demo_family()
     print({"accounts": account_result, "family": family_result})
 
 

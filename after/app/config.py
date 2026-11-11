@@ -13,11 +13,12 @@ class Settings(BaseSettings):
 
     app_name: str = "族谱查询系统 API"
     debug: bool = False
-    database_url: str = "sqlite:///./family_tree.db"
-    neo4j_uri: str = "bolt://127.0.0.1:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str = ""
-    neo4j_database: str = "neo4j"
+    database_url: str = ""
+    postgres_host: str = "127.0.0.1"
+    postgres_port: int = 5432
+    postgres_user: str = "familytree"
+    postgres_password: str = ""
+    postgres_db: str = "familytree"
     server_url: str = "http://localhost:8000"
 
     model_config = SettingsConfigDict(

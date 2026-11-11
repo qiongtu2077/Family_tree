@@ -1,5 +1,5 @@
 """
-Neo4j 示例数据初始化服务
+PostgreSQL 示例数据初始化服务
 创建可用于登录后查看的完整演示族谱数据。
 """
 from __future__ import annotations
@@ -8,7 +8,7 @@ from ..repositories.person_repository import PersonRepository
 
 
 class SeedService:
-    """初始化 Neo4j 约束和示例族谱数据。"""
+    """初始化 PostgreSQL 约束和示例族谱数据。"""
 
     def __init__(self, repository: PersonRepository):
         """保存人物 repository。"""
@@ -17,6 +17,7 @@ class SeedService:
     def seed_demo_family(self) -> dict[str, int]:
         """写入示例人物、家庭单元和关系。"""
         self.repository.ensure_constraints()
+        account_bindings = self.repository.get_demo_account_bindings()
         self.repository.clear_demo_family()
         people = _demo_people()
         family_units = _demo_family_units()
@@ -57,6 +58,7 @@ class SeedService:
                 {"side": side, "relationKind": "biological", "certainty": 1.0},
             )
 
+        self.repository.restore_demo_account_bindings(account_bindings)
         return {"people": len(people), "family_units": len(family_units)}
 
 

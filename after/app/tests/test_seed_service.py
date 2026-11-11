@@ -14,6 +14,7 @@ class RecordingRepository:
         self.spouse_links = []
         self.constraints_ensured = False
         self.demo_cleared = False
+        self.restored_bindings = None
 
     def ensure_constraints(self):
         """记录约束初始化动作。"""
@@ -22,6 +23,14 @@ class RecordingRepository:
     def clear_demo_family(self):
         """记录清理旧演示数据动作。"""
         self.demo_cleared = True
+
+    def get_demo_account_bindings(self):
+        """提供需要在重建后保留的演示账号绑定。"""
+        return {1: "demo:child"}
+
+    def restore_demo_account_bindings(self, bindings):
+        """记录演示账号绑定已交回仓库恢复。"""
+        self.restored_bindings = bindings
 
     def get_person(self, person_id):
         """查询已记录人物。"""
@@ -63,14 +72,15 @@ class RecordingRepository:
         return True
 
 
-def test_seed_demo_family_writes_complete_neo4j_graph_dataset():
-    """示例族谱必须通过仓库写入完整 Neo4j 图谱数据。"""
+def test_seed_demo_family_writes_complete_graph_dataset():
+    """示例族谱必须通过仓库写入完整关系数据并保留账号绑定。"""
     repository = RecordingRepository()
     result = SeedService(repository).seed_demo_family()
 
     assert result == {"people": 44, "family_units": 16}
     assert repository.constraints_ensured is True
     assert repository.demo_cleared is True
+    assert repository.restored_bindings == {1: "demo:child"}
     assert len(repository.people) == 44
     assert len(repository.family_units) == 16
     assert repository.people["demo:uncle-spouse"]["name"] == "吴安琪"

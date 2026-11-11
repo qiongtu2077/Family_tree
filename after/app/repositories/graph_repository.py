@@ -1,20 +1,34 @@
 """
-族谱图数据访问
-只负责执行 Cypher 查询和返回原始图记录。
+族谱关系数据访问
+使用 SQLAlchemy 查询人物、家庭单元和关系表，并组装既有五图投影。
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
+from urllib.parse import quote
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
+
+from ..graph_models import (
+    FamilyChild,
+    FamilyPartner,
+    FamilyUnit,
+    GenealogyPerson,
+    ParentChild,
+    Spouse,
+)
 
 
 class GraphRepository:
-    """读取族谱图投影数据。"""
+    """读取关系数据库中的族谱投影和亲缘路径。"""
 
-    def __init__(self, session):
-        """保存 Neo4j Session。"""
+    def __init__(self, session: Session):
+        """保存当前请求使用的 SQLAlchemy Session。"""
         self.session = session
 
-    # --- 图谱视图 --- #
+    # --- 五图投影与范围裁剪 --- #
 
     def get_mainline_graph(
         self,
@@ -28,6 +42,7 @@ class GraphRepository:
             _safe_depth(ancestor_depth),
             _safe_depth(descendant_depth),
         )
+
 
     def get_focus_graph(self, person_id: str, generations: int) -> dict[str, Any] | None:
         """读取中心人物谱系图所需的人物、家庭单元和关系。"""
@@ -59,6 +74,7 @@ class GraphRepository:
             **edges,
         }
 
+
     def get_inlaw_graph(
         self,
         person_id: str,
@@ -71,6 +87,7 @@ class GraphRepository:
 
         raw_graph = self._get_inlaw_projection(person_id, spouse_id, _safe_depth(depth))
         return raw_graph
+
 
     def get_bridge_graph(
         self,
@@ -90,6 +107,7 @@ class GraphRepository:
             bridge_depth,
             family_unit_id=family_unit_id,
         )
+
 
     def get_branch_graph(self, family_unit_id: str, depth: int) -> dict[str, Any] | None:
         """读取某个家庭单元向下展开的后代分支图。"""
@@ -141,6 +159,7 @@ class GraphRepository:
             },
         )
 
+
     def get_branch_graph_by_root(
         self,
         root_type: str,
@@ -189,6 +208,7 @@ class GraphRepository:
             },
         }
 
+
     def get_overview_graph(self, scope: str, max_nodes: int) -> dict[str, Any] | None:
         """读取家族全景图，默认返回范围内全部人物和家庭单元。"""
         limit = _safe_limit(max_nodes)
@@ -222,27 +242,6 @@ class GraphRepository:
             **edges,
         }
 
-    def get_center_candidates(self, keyword: str, limit: int) -> list[Any]:
-        """读取中心人物候选，最终选择必须落到真实 Person。"""
-        safe_keyword = (keyword or "").strip()
-        if not safe_keyword:
-            return []
-
-        query = """
-        MATCH (person:Person)
-        WHERE toLower(person.name) CONTAINS toLower($keyword)
-        RETURN person
-        ORDER BY person.name, person.birthDate, person.personId
-        LIMIT $limit
-        """
-        return [
-            record["person"]
-            for record in self.session.run(
-                query,
-                keyword=safe_keyword,
-                limit=min(max(int(limit), 1), 50),
-            )
-        ]
 
     def get_center_context(self, person_id: str) -> dict[str, Any] | None:
         """读取中心人物上下文和五图参数候选。"""
@@ -268,49 +267,6 @@ class GraphRepository:
             "warnings": warnings,
         }
 
-    def get_relation_path(self, from_person_id: str, to_person_id: str) -> dict[str, Any] | None:
-        """读取两个人之间的最短亲缘路径。"""
-        query = """
-        MATCH (start:Person {personId: $from_person_id})
-        MATCH (end:Person {personId: $to_person_id})
-        MATCH path = shortestPath((start)-[:PARENT_OF|SPOUSE_OF*..10]-(end))
-        RETURN nodes(path) AS persons, relationships(path) AS relations
-        """
-        record = self.session.run(
-            query,
-            from_person_id=str(from_person_id),
-            to_person_id=str(to_person_id),
-        ).single()
-        return _record_to_dict(record) if record else None
-
-    # --- 管理诊断 --- #
-
-    def get_graph_issues(self) -> list[dict[str, Any]]:
-        """读取常见族谱数据异常。"""
-        query = """
-        CALL {
-          MATCH (person:Person)
-          WHERE NOT (person)--()
-          RETURN person, 'isolated_person' AS issue_type, '人物没有任何关系' AS message
-          UNION ALL
-          MATCH (child:Person)<-[rel:PARENT_OF {side: 'father'}]-(father:Person)
-          WITH child, collect(father) AS fathers
-          WHERE size(fathers) > 1
-          RETURN child AS person, 'multiple_fathers' AS issue_type, '一个人物存在多个生父' AS message
-          UNION ALL
-          MATCH (child:Person)<-[rel:PARENT_OF {side: 'mother'}]-(mother:Person)
-          WITH child, collect(mother) AS mothers
-          WHERE size(mothers) > 1
-          RETURN child AS person, 'multiple_mothers' AS issue_type, '一个人物存在多个生母' AS message
-          UNION ALL
-          MATCH path=(person:Person)-[:PARENT_OF*1..12]->(person)
-          RETURN person, 'ancestor_cycle' AS issue_type, '祖先路径出现循环' AS message
-        }
-        RETURN person, issue_type, message
-        ORDER BY issue_type, person.name
-        LIMIT 200
-        """
-        return [_record_to_dict(record) for record in self.session.run(query)]
 
     def _get_mainline_projection(
         self,
@@ -375,6 +331,7 @@ class GraphRepository:
                 "projection_reason": "mainline_projection",
             },
         )
+
 
     def _get_inlaw_projection(
         self,
@@ -443,6 +400,7 @@ class GraphRepository:
             },
         )
 
+
     def _get_bridge_projection(
         self,
         person_id: str,
@@ -501,6 +459,7 @@ class GraphRepository:
             },
         )
 
+
     def _get_nine_kinship_overview(self, person_id: str, limit: int) -> dict[str, Any] | None:
         """读取中心人物九族范围的全景索引投影。"""
         center = self._get_person_node(person_id)
@@ -527,6 +486,7 @@ class GraphRepository:
             },
         )
 
+
     def _build_raw_graph(
         self,
         person_ids: list[str],
@@ -551,129 +511,12 @@ class GraphRepository:
             **edges,
         }
 
-    def _get_direct_ancestor_person_ids(self, person_id: str, depth: int) -> list[str]:
-        """读取上行直系祖先 ID。"""
-        query = f"""
-        MATCH path=(ancestor:Person)-[:PARENT_OF*1..{depth}]->(:Person {{personId: $person_id}})
-        UNWIND nodes(path) AS person
-        WITH DISTINCT person
-        WHERE person.personId <> $person_id
-        RETURN person.personId AS person_id
-        ORDER BY person.birthDate, person.name, person.personId
-        """
-        return _unique_ids([
-            record["person_id"]
-            for record in self.session.run(query, person_id=str(person_id))
-            if record["person_id"]
-        ])
-
-    def _get_direct_descendant_person_ids(self, person_id: str, depth: int) -> list[str]:
-        """读取下行直系后代 ID。"""
-        query = f"""
-        MATCH path=(:Person {{personId: $person_id}})-[:PARENT_OF*1..{depth}]->(descendant:Person)
-        UNWIND nodes(path) AS person
-        WITH DISTINCT person
-        WHERE person.personId <> $person_id
-        RETURN person.personId AS person_id
-        ORDER BY person.birthDate, person.name, person.personId
-        """
-        return _unique_ids([
-            record["person_id"]
-            for record in self.session.run(query, person_id=str(person_id))
-            if record["person_id"]
-        ])
-
-    def _get_sibling_person_ids(self, person_id: str) -> list[str]:
-        """读取同父母家庭中的兄弟姐妹 ID。"""
-        query = """
-        MATCH (:Person {personId: $person_id})<-[:PARENT_OF]-(parent:Person)-[:PARENT_OF]->(sibling:Person)
-        WHERE sibling.personId <> $person_id
-        WITH DISTINCT sibling
-        RETURN sibling.personId AS person_id
-        ORDER BY sibling.birthDate, sibling.name, sibling.personId
-        """
-        return _unique_ids([
-            record["person_id"]
-            for record in self.session.run(query, person_id=str(person_id))
-            if record["person_id"]
-        ])
-
-    def _get_parent_family_unit_ids(self, person_id: str) -> list[str]:
-        """读取人物作为子女所属的父母家庭单元 ID。"""
-        query = """
-        MATCH (unit:FamilyUnit)-[:HAS_CHILD]->(:Person {personId: $person_id})
-        RETURN DISTINCT unit.familyUnitId AS family_unit_id
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        """
-        return _unique_ids([
-            record["family_unit_id"]
-            for record in self.session.run(query, person_id=str(person_id))
-            if record["family_unit_id"]
-        ])
 
     def _get_first_parent_family_unit_id(self, person_id: str) -> str | None:
         """读取人物首个父母家庭单元 ID。"""
         family_unit_ids = self._get_parent_family_unit_ids(person_id)
         return family_unit_ids[0] if family_unit_ids else None
 
-    def _get_parent_family_unit_ids_for_people(self, person_ids: list[str]) -> list[str]:
-        """读取一组人物作为子女接触的父母家庭单元 ID。"""
-        query = """
-        MATCH (unit:FamilyUnit)-[:HAS_CHILD]->(child:Person)
-        WHERE child.personId IN $person_ids
-        RETURN DISTINCT unit.familyUnitId AS family_unit_id
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        """
-        return _unique_ids([
-            record["family_unit_id"]
-            for record in self.session.run(query, person_ids=person_ids)
-            if record["family_unit_id"]
-        ])
-
-    def _get_child_family_unit_ids_for_people(self, person_ids: list[str]) -> list[str]:
-        """读取一组人物作为伴侣且有子女的家庭单元 ID。"""
-        query = """
-        MATCH (person:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE person.personId IN $person_ids
-          AND EXISTS { MATCH (unit)-[:HAS_CHILD]->(:Person) }
-        RETURN DISTINCT unit.familyUnitId AS family_unit_id
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        """
-        return _unique_ids([
-            record["family_unit_id"]
-            for record in self.session.run(query, person_ids=person_ids)
-            if record["family_unit_id"]
-        ])
-
-    def _get_common_family_unit_ids(self, person_id: str, spouse_id: str) -> list[str]:
-        """读取两个人共同作为伴侣进入的家庭单元 ID。"""
-        query = """
-        MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)<-[:PARTNER_IN]-(:Person {personId: $spouse_id})
-        RETURN DISTINCT unit.familyUnitId AS family_unit_id
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        """
-        return _unique_ids([
-            record["family_unit_id"]
-            for record in self.session.run(
-                query,
-                person_id=str(person_id),
-                spouse_id=str(spouse_id),
-            )
-            if record["family_unit_id"]
-        ])
-
-    def _get_partner_person_ids_for_family_unit(self, family_unit_id: str) -> list[str]:
-        """读取家庭单元伴侣人物 ID。"""
-        query = """
-        MATCH (partner:Person)-[:PARTNER_IN]->(:FamilyUnit {familyUnitId: $family_unit_id})
-        RETURN DISTINCT partner.personId AS person_id
-        ORDER BY partner.birthDate, partner.name, partner.personId
-        """
-        return _unique_ids([
-            record["person_id"]
-            for record in self.session.run(query, family_unit_id=str(family_unit_id))
-            if record["person_id"]
-        ])
 
     def _get_parent_family_chain(self, person_id: str, max_depth: int = 4) -> list[str]:
         """读取能覆盖人物的父母到祖先家庭单元链。"""
@@ -702,6 +545,7 @@ class GraphRepository:
             frontier_ids = parent_ids
         return chain
 
+
     def _resolve_branch_root_for_person(self, person_id: str) -> dict[str, str | None]:
         """解析人物后代分支应该使用的根家庭单元。"""
         own_family_id = self._get_primary_child_family_unit_id(person_id)
@@ -726,6 +570,7 @@ class GraphRepository:
             "warning": "未找到可展开家庭单元，仅显示本人",
         }
 
+
     def _get_nine_kinship_person_ids(self, person_id: str) -> list[str]:
         """读取中心人物九族候选人物 ID。"""
         direct_ids = _unique_ids([
@@ -741,12 +586,14 @@ class GraphRepository:
         child_ids = self._get_child_person_ids_for_family_units(family_unit_ids)
         return _unique_ids([*direct_ids, *partner_ids, *child_ids])
 
+
     def _get_nine_kinship_family_unit_ids(self, person_ids: list[str]) -> list[str]:
         """读取九族候选人物必要家庭单元 ID。"""
         return _unique_ids([
             *self._get_parent_family_unit_ids_for_people(person_ids),
             *self._get_child_family_unit_ids_for_people(person_ids),
         ])
+
 
     def _build_branch_capsule(
         self,
@@ -776,6 +623,7 @@ class GraphRepository:
             "target_view": target_view,
         }
 
+
     def _count_family_descendants(self, family_unit_id: str | None, max_depth: int) -> int:
         """统计家庭单元下方可折叠后代人数。"""
         if not family_unit_id:
@@ -792,6 +640,7 @@ class GraphRepository:
             if not frontier_unit_ids:
                 break
         return len(descendant_ids)
+
 
     def _count_family_descendant_generations(self, family_unit_id: str | None, max_depth: int) -> int:
         """统计家庭单元折叠后代层数。"""
@@ -812,6 +661,7 @@ class GraphRepository:
                 break
         return generation_count
 
+
     def _preview_family_descendants(self, family_unit_id: str | None, limit: int) -> list[str]:
         """预览家庭单元下方的前几个后代姓名。"""
         if not family_unit_id:
@@ -823,6 +673,7 @@ class GraphRepository:
             if dict(person).get("name")
         ]
 
+
     def _count_spouse_origin_family(self, spouse_id: str) -> int:
         """统计人物原生家庭可折叠人数。"""
         parent_family_id = self._get_first_parent_family_unit_id(spouse_id)
@@ -832,21 +683,254 @@ class GraphRepository:
         descendant_count = self._count_family_descendants(parent_family_id, 4)
         return partner_count + descendant_count
 
-    def _get_person_node(self, person_id: str):
-        """读取单个人物节点。"""
-        record = self.session.run(
-            "MATCH (person:Person {personId: $person_id}) RETURN person LIMIT 1",
-            person_id=str(person_id),
-        ).single()
-        return record["person"] if record else None
 
-    def _get_family_unit_node(self, family_unit_id: str):
-        """读取单个家庭单元节点。"""
-        record = self.session.run(
-            "MATCH (unit:FamilyUnit {familyUnitId: $family_unit_id}) RETURN unit LIMIT 1",
-            family_unit_id=str(family_unit_id),
-        ).single()
-        return record["unit"] if record else None
+    # --- 人物检索与关系路径 --- #
+
+    def get_center_candidates(self, keyword: str, limit: int) -> list[dict[str, Any]]:
+        """按姓名搜索中心人物，限制候选数量。"""
+        keyword = (keyword or "").strip()
+        if not keyword:
+            return []
+        statement = (
+            select(GenealogyPerson)
+            .where(func.lower(GenealogyPerson.name).contains(keyword.lower(), autoescape=True))
+            .order_by(GenealogyPerson.name, GenealogyPerson.person_id)
+            .limit(min(max(int(limit), 1), 50))
+        )
+        return [person.to_dict() for person in self.session.scalars(statement)]
+
+    def get_relation_path(self, from_person_id: str, to_person_id: str) -> dict[str, Any] | None:
+        """通过逐层邻接查询读取十条关系以内的最短亲缘路径。"""
+        start_id, end_id = str(from_person_id), str(to_person_id)
+        start = self._get_person_node(start_id)
+        end = self._get_person_node(end_id)
+        if start is None or end is None:
+            return None
+        if start_id == end_id:
+            return {"persons": [start], "relations": []}
+
+        previous: dict[str, tuple[str, dict[str, Any]]] = {}
+        seen = {start_id}
+        frontier = [start_id]
+        for _ in range(10):
+            adjacent = self._get_person_adjacency(frontier)
+            next_frontier = []
+            for current_id in frontier:
+                for neighbor_id, relationship in adjacent.get(current_id, []):
+                    if neighbor_id in seen:
+                        continue
+                    seen.add(neighbor_id)
+                    previous[neighbor_id] = (current_id, relationship)
+                    if neighbor_id == end_id:
+                        return self._assemble_relation_path(start_id, end_id, previous)
+                    next_frontier.append(neighbor_id)
+            if not next_frontier:
+                break
+            frontier = next_frontier
+        return None
+
+    def _get_person_adjacency(self, person_ids: list[str]) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+        """仅查询当前 BFS 前沿接触的亲子和配偶关系。"""
+        adjacency: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+        frontier = set(person_ids)
+        parent_rows = self.session.scalars(
+            select(ParentChild).where(or_(
+                ParentChild.parent_id.in_(person_ids),
+                ParentChild.child_id.in_(person_ids),
+            ))
+        )
+        spouse_rows = self.session.scalars(
+            select(Spouse).where(or_(
+                Spouse.person_a_id.in_(person_ids),
+                Spouse.person_b_id.in_(person_ids),
+            ))
+        )
+        for row in parent_rows:
+            relationship = _relationship_dict("PARENT_OF", row.parent_id, row.child_id, row.to_dict())
+            if row.parent_id in frontier:
+                adjacency[row.parent_id].append((row.child_id, relationship))
+            if row.child_id in frontier:
+                adjacency[row.child_id].append((row.parent_id, relationship))
+        for row in spouse_rows:
+            relationship = _relationship_dict("SPOUSE_OF", row.person_a_id, row.person_b_id, row.to_dict())
+            if row.person_a_id in frontier:
+                adjacency[row.person_a_id].append((row.person_b_id, relationship))
+            if row.person_b_id in frontier:
+                adjacency[row.person_b_id].append((row.person_a_id, relationship))
+        for neighbors in adjacency.values():
+            neighbors.sort(key=lambda item: (
+                item[1]["type"],
+                item[0],
+                item[1].get("relationKind", "biological") != "biological",
+                item[1]["id"],
+            ))
+        return adjacency
+
+    def _assemble_relation_path(
+        self,
+        start_id: str,
+        end_id: str,
+        previous: dict[str, tuple[str, dict[str, Any]]],
+    ) -> dict[str, Any]:
+        """还原有序路径人物，关系端点保留父母到子女的真实方向。"""
+        person_ids = [end_id]
+        relations = []
+        while person_ids[-1] != start_id:
+            parent_id, relationship = previous[person_ids[-1]]
+            relations.append(relationship)
+            person_ids.append(parent_id)
+        person_ids.reverse()
+        relations.reverse()
+        people = {person["personId"]: person for person in self._get_people_by_ids(person_ids)}
+        return {"persons": [people[person_id] for person_id in person_ids], "relations": relations}
+
+    # --- 管理诊断 --- #
+
+    def get_graph_issues(self) -> list[dict[str, Any]]:
+        """检查孤立人物、多位父母及祖先循环，最多返回二百项。"""
+        people = list(self.session.scalars(select(GenealogyPerson)))
+        parents = list(self.session.scalars(select(ParentChild)))
+        connected = set()
+        children: dict[str, set[str]] = defaultdict(set)
+        parent_sides: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for row in parents:
+            connected.update((row.parent_id, row.child_id))
+            children[row.parent_id].add(row.child_id)
+            side = row.to_dict().get("side")
+            if side in {"father", "mother"} and row.relation_kind == "biological":
+                parent_sides[(row.child_id, side)].add(row.parent_id)
+        for row in self.session.scalars(select(FamilyPartner)):
+            connected.add(row.person_id)
+        for row in self.session.scalars(select(FamilyChild)):
+            connected.add(row.child_id)
+        for row in self.session.scalars(select(Spouse)):
+            connected.update((row.person_a_id, row.person_b_id))
+
+        issues = []
+        for person in people:
+            person_id = person.person_id
+            if person_id not in connected:
+                issues.append(_issue(person, "isolated_person", "人物没有任何关系"))
+            for side, issue_type, label in (
+                ("father", "multiple_fathers", "生父"),
+                ("mother", "multiple_mothers", "生母"),
+            ):
+                if len(parent_sides[(person_id, side)]) > 1:
+                    issues.append(_issue(person, issue_type, f"一个人物存在多个{label}"))
+            # 诊断只扫描管理请求；普通五图和路径查询不读取全库关系。
+            if _has_ancestor_cycle(person_id, children):
+                issues.append(_issue(person, "ancestor_cycle", "祖先路径出现循环"))
+        issues.sort(key=lambda item: (item["issue_type"], item["person"]["name"], item["person"]["personId"]))
+        return issues[:200]
+
+    # --- 节点与家庭成员读取 --- #
+
+    def _get_person_node(self, person_id: str) -> dict[str, Any] | None:
+        """按稳定字符串 ID 读取人物。"""
+        person = self.session.get(GenealogyPerson, str(person_id))
+        return person.to_dict() if person is not None else None
+
+    def _get_family_unit_node(self, family_unit_id: str) -> dict[str, Any] | None:
+        """按稳定字符串 ID 读取家庭单元。"""
+        unit = self.session.get(FamilyUnit, str(family_unit_id))
+        return unit.to_dict() if unit is not None else None
+
+    def _get_people_by_ids(self, person_ids: list[str]) -> list[dict[str, Any]]:
+        """按已裁剪的 ID 集合读取人物并稳定排序。"""
+        if not person_ids:
+            return []
+        people = self.session.scalars(select(GenealogyPerson).where(GenealogyPerson.person_id.in_(person_ids)))
+        return sorted((person.to_dict() for person in people), key=_person_sort_key)
+
+    def _get_family_units_by_ids(self, family_unit_ids: list[str]) -> list[dict[str, Any]]:
+        """按 ID 集合读取家庭单元并按展示顺序排序。"""
+        if not family_unit_ids:
+            return []
+        units = self.session.scalars(select(FamilyUnit).where(FamilyUnit.family_unit_id.in_(family_unit_ids)))
+        return sorted((unit.to_dict() for unit in units), key=_family_sort_key)
+
+    def _get_family_units_for_people(self, person_ids: list[str]) -> list[dict[str, Any]]:
+        """读取人物作为伴侣所属的家庭单元。"""
+        if not person_ids:
+            return []
+        unit_ids = self.session.scalars(
+            select(FamilyPartner.family_unit_id).where(FamilyPartner.person_id.in_(person_ids)).distinct()
+        ).all()
+        return self._get_family_units_by_ids(unit_ids)
+
+    def _get_family_units_touching_people(self, person_ids: list[str]) -> list[dict[str, Any]]:
+        """读取人物作为伴侣或子女接触的家庭单元。"""
+        if not person_ids:
+            return []
+        partner_ids = self.session.scalars(
+            select(FamilyPartner.family_unit_id).where(FamilyPartner.person_id.in_(person_ids))
+        ).all()
+        child_ids = self.session.scalars(
+            select(FamilyChild.family_unit_id).where(FamilyChild.child_id.in_(person_ids))
+        ).all()
+        return self._get_family_units_by_ids(_unique_ids([*partner_ids, *child_ids]))
+
+    def _get_partners_for_family_units(self, family_unit_ids: list[str]) -> list[dict[str, Any]]:
+        """读取指定家庭单元中的伴侣人物。"""
+        if not family_unit_ids:
+            return []
+        person_ids = self.session.scalars(
+            select(FamilyPartner.person_id).where(FamilyPartner.family_unit_id.in_(family_unit_ids)).distinct()
+        ).all()
+        return self._get_people_by_ids(person_ids)
+
+    def _get_child_person_ids_for_family_units(self, family_unit_ids: list[str]) -> list[str]:
+        """读取家庭单元直接子女，并按生平字段稳定排序。"""
+        if not family_unit_ids:
+            return []
+        person_ids = self.session.scalars(
+            select(FamilyChild.child_id).where(FamilyChild.family_unit_id.in_(family_unit_ids)).distinct()
+        ).all()
+        return [person["personId"] for person in self._get_people_by_ids(person_ids)]
+
+    def _get_partner_person_ids_for_family_unit(self, family_unit_id: str) -> list[str]:
+        """读取某家庭单元的伴侣人物 ID。"""
+        return [person["personId"] for person in self._get_partners_for_family_units([family_unit_id])]
+
+    def _get_parent_family_unit_ids(self, person_id: str) -> list[str]:
+        """读取人物作为子女所属的家庭单元 ID。"""
+        return self._get_parent_family_unit_ids_for_people([str(person_id)])
+
+    def _get_parent_family_unit_ids_for_people(self, person_ids: list[str]) -> list[str]:
+        """读取一组人物的父母家庭单元 ID。"""
+        if not person_ids:
+            return []
+        unit_ids = self.session.scalars(
+            select(FamilyChild.family_unit_id).where(FamilyChild.child_id.in_(person_ids)).distinct()
+        ).all()
+        return [unit["familyUnitId"] for unit in self._get_family_units_by_ids(unit_ids)]
+
+    def _get_child_family_unit_ids_for_people(self, person_ids: list[str]) -> list[str]:
+        """读取人物作为伴侣且存在子女的家庭单元 ID。"""
+        if not person_ids:
+            return []
+        unit_ids = self.session.scalars(
+            select(FamilyPartner.family_unit_id)
+            .join(FamilyChild, FamilyChild.family_unit_id == FamilyPartner.family_unit_id)
+            .where(FamilyPartner.person_id.in_(person_ids))
+            .distinct()
+        ).all()
+        return [unit["familyUnitId"] for unit in self._get_family_units_by_ids(unit_ids)]
+
+    def _get_primary_child_family_unit_id(self, person_id: str) -> str | None:
+        """读取人物首个具有子女的家庭单元。"""
+        unit_ids = self._get_child_family_unit_ids_for_people([str(person_id)])
+        return unit_ids[0] if unit_ids else None
+
+    def _get_common_family_unit_ids(self, person_id: str, spouse_id: str) -> list[str]:
+        """读取两位人物共同作为伴侣所属的家庭单元。"""
+        left_ids = set(self.session.scalars(
+            select(FamilyPartner.family_unit_id).where(FamilyPartner.person_id == str(person_id))
+        ))
+        right_ids = set(self.session.scalars(
+            select(FamilyPartner.family_unit_id).where(FamilyPartner.person_id == str(spouse_id))
+        ))
+        return [unit["familyUnitId"] for unit in self._get_family_units_by_ids(list(left_ids & right_ids))]
 
     def _are_spouses_or_partners(
         self,
@@ -854,482 +938,308 @@ class GraphRepository:
         spouse_id: str,
         family_unit_id: str | None = None,
     ) -> bool:
-        """判断两个人是否通过配偶或同一家庭单元连接。"""
+        """确认两人拥有指定家庭单元，或存在直接配偶关系。"""
+        if str(person_id) == str(spouse_id):
+            return False
+        common_ids = self._get_common_family_unit_ids(person_id, spouse_id)
         if family_unit_id:
-            query = """
-            MATCH (left:Person {personId: $person_id})
-            MATCH (right:Person {personId: $spouse_id})
-            OPTIONAL MATCH (left)-[:PARTNER_IN]->(unit:FamilyUnit {familyUnitId: $family_unit_id})<-[:PARTNER_IN]-(right)
-            RETURN count(DISTINCT unit) AS relation_count
-            """
-            record = self.session.run(
-                query,
-                person_id=str(person_id),
-                spouse_id=str(spouse_id),
-                family_unit_id=str(family_unit_id),
-            ).single()
-            return bool(record and record["relation_count"] > 0)
+            return str(family_unit_id) in common_ids
+        if common_ids:
+            return True
+        left_id, right_id = sorted((str(person_id), str(spouse_id)))
+        return self.session.get(Spouse, (left_id, right_id)) is not None
 
-        query = """
-        MATCH (left:Person {personId: $person_id})
-        MATCH (right:Person {personId: $spouse_id})
-        OPTIONAL MATCH (left)-[spouse_rel:SPOUSE_OF]-(right)
-        OPTIONAL MATCH (left)-[:PARTNER_IN]->(unit:FamilyUnit)<-[:PARTNER_IN]-(right)
-        RETURN count(DISTINCT spouse_rel) + count(DISTINCT unit) AS relation_count
-        """
-        record = self.session.run(
-            query,
-            person_id=str(person_id),
-            spouse_id=str(spouse_id),
-        ).single()
-        return bool(record and record["relation_count"] > 0)
+    # --- 直系与同胞邻接遍历 --- #
 
-    def _get_related_people(self, person_id: str, direction: str, depth: int) -> list[Any]:
-        """按方向读取祖先或后代人物。"""
-        if direction == "ancestors":
-            query = f"""
-            MATCH path=(person:Person)-[:PARENT_OF*1..{depth}]->(:Person {{personId: $person_id}})
-            UNWIND nodes(path) AS related
-            RETURN DISTINCT related AS person
-            """
-        else:
-            query = f"""
-            MATCH path=(:Person {{personId: $person_id}})-[:PARENT_OF*1..{depth}]->(person:Person)
-            UNWIND nodes(path) AS related
-            RETURN DISTINCT related AS person
-            """
-        return [record["person"] for record in self.session.run(query, person_id=str(person_id))]
+    def _get_direct_ancestor_person_ids(self, person_id: str, depth: int) -> list[str]:
+        """沿亲子表逐代查询上行祖先。"""
+        return self._get_lineal_person_ids(person_id, depth, ancestors=True)
 
-    def _get_siblings_for_lineage(self, person_id: str, depth: int) -> list[Any]:
-        """读取中心人物及祖先链上人物的兄弟姐妹。"""
-        lineage_ids = self._get_lineage_person_ids(person_id, depth)
-        query = """
-        MATCH (lineage:Person)
-        WHERE lineage.personId IN $lineage_ids
-        MATCH (lineage)<-[:PARENT_OF]-(parent:Person)-[:PARENT_OF]->(sibling:Person)
-        WHERE sibling <> lineage
-        RETURN DISTINCT sibling AS person
-        """
-        return [record["person"] for record in self.session.run(query, lineage_ids=lineage_ids)]
+    def _get_direct_descendant_person_ids(self, person_id: str, depth: int) -> list[str]:
+        """沿亲子表逐代查询下行后代。"""
+        return self._get_lineal_person_ids(person_id, depth, ancestors=False)
+
+    def _get_lineal_person_ids(self, person_id: str, depth: int, *, ancestors: bool) -> list[str]:
+        """按请求代数读取必要邻接，访问过的人物不再扩展。"""
+        source = ParentChild.child_id if ancestors else ParentChild.parent_id
+        target = ParentChild.parent_id if ancestors else ParentChild.child_id
+        seen = {str(person_id)}
+        frontier = [str(person_id)]
+        result = []
+        for _ in range(depth):
+            adjacent = self.session.scalars(select(target).where(source.in_(frontier)).distinct()).all()
+            frontier = sorted(set(adjacent) - seen)
+            if not frontier:
+                break
+            seen.update(frontier)
+            result.extend(frontier)
+        return [person["personId"] for person in self._get_people_by_ids(result)]
+
+    def _get_sibling_person_ids(self, person_id: str) -> list[str]:
+        """读取至少共享一位父母的兄弟姐妹。"""
+        parent_ids = self.session.scalars(
+            select(ParentChild.parent_id).where(ParentChild.child_id == str(person_id))
+        ).all()
+        if not parent_ids:
+            return []
+        sibling_ids = self.session.scalars(
+            select(ParentChild.child_id)
+            .where(ParentChild.parent_id.in_(parent_ids), ParentChild.child_id != str(person_id))
+            .distinct()
+        ).all()
+        return [person["personId"] for person in self._get_people_by_ids(sibling_ids)]
+
+    def _get_related_people(self, person_id: str, direction: str, depth: int) -> list[dict[str, Any]]:
+        """读取中心人物某一方向上的直系人物。"""
+        person_ids = self._get_lineal_person_ids(person_id, depth, ancestors=direction == "ancestors")
+        return self._get_people_by_ids(person_ids)
 
     def _get_lineage_person_ids(self, person_id: str, depth: int) -> list[str]:
-        """读取中心人物与祖先链人物 ID。"""
-        query = f"""
-        MATCH path=(ancestor:Person)-[:PARENT_OF*0..{depth}]->(:Person {{personId: $person_id}})
-        UNWIND nodes(path) AS person
-        RETURN DISTINCT person.personId AS person_id
-        """
-        return _unique_ids([
-            record["person_id"]
-            for record in self.session.run(query, person_id=str(person_id))
-            if record["person_id"]
-        ])
+        """读取中心人物及其祖先链人物 ID。"""
+        return _unique_ids([str(person_id), *self._get_direct_ancestor_person_ids(person_id, depth)])
 
-    def _get_family_units_for_people(self, person_ids: list[str]) -> list[Any]:
-        """读取人物所属家庭单元。"""
-        query = """
-        MATCH (person:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE person.personId IN $person_ids
-        RETURN DISTINCT unit
-        """
-        return [record["unit"] for record in self.session.run(query, person_ids=person_ids)]
+    def _get_siblings_for_lineage(self, person_id: str, depth: int) -> list[dict[str, Any]]:
+        """读取中心人物和祖先链中各人的兄弟姐妹。"""
+        lineage_ids = self._get_lineage_person_ids(person_id, depth)
+        parent_ids = self.session.scalars(
+            select(ParentChild.parent_id).where(ParentChild.child_id.in_(lineage_ids)).distinct()
+        ).all()
+        if not parent_ids:
+            return []
+        sibling_ids = self.session.scalars(
+            select(ParentChild.child_id).where(ParentChild.parent_id.in_(parent_ids)).distinct()
+        ).all()
+        return self._get_people_by_ids(sibling_ids)
 
-    def _get_family_units_by_ids(self, family_unit_ids: list[str]) -> list[Any]:
-        """按 ID 列表读取家庭单元节点。"""
-        query = """
-        MATCH (unit:FamilyUnit)
-        WHERE unit.familyUnitId IN $family_unit_ids
-        RETURN unit
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        """
-        return [
-            record["unit"]
-            for record in self.session.run(query, family_unit_ids=family_unit_ids)
-        ]
-
-    def _get_family_units_touching_people(self, person_ids: list[str]) -> list[Any]:
-        """读取人物作为伴侣或子女接触到的家庭单元。"""
-        query = """
-        MATCH (unit:FamilyUnit)
-        WHERE EXISTS {
-          MATCH (person:Person)-[:PARTNER_IN]->(unit)
-          WHERE person.personId IN $person_ids
-        } OR EXISTS {
-          MATCH (unit)-[:HAS_CHILD]->(child:Person)
-          WHERE child.personId IN $person_ids
-        }
-        RETURN DISTINCT unit
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        """
-        return [record["unit"] for record in self.session.run(query, person_ids=person_ids)]
-
-    def _get_partners_for_family_units(self, family_unit_ids: list[str]) -> list[Any]:
-        """读取家庭单元中的伴侣人物。"""
-        query = """
-        MATCH (partner:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE unit.familyUnitId IN $family_unit_ids
-        RETURN DISTINCT partner AS person
-        """
-        return [
-            record["person"]
-            for record in self.session.run(query, family_unit_ids=family_unit_ids)
-        ]
-
-    def _get_child_person_ids_for_family_units(self, family_unit_ids: list[str]) -> list[str]:
-        """读取家庭单元的直接子女 ID。"""
-        query = """
-        MATCH (unit:FamilyUnit)-[:HAS_CHILD]->(child:Person)
-        WHERE unit.familyUnitId IN $family_unit_ids
-        WITH DISTINCT child
-        ORDER BY child.birthDate, child.name, child.personId
-        RETURN child.personId AS person_id
-        """
-        return _unique_ids([
-            record["person_id"]
-            for record in self.session.run(query, family_unit_ids=family_unit_ids)
-            if record["person_id"]
-        ])
-
-    def _get_people_by_ids(self, person_ids: list[str]) -> list[Any]:
-        """按 ID 列表重新读取去重后的人物节点。"""
-        query = """
-        MATCH (person:Person)
-        WHERE person.personId IN $person_ids
-        RETURN person
-        ORDER BY person.birthDate, person.name
-        """
-        return [record["person"] for record in self.session.run(query, person_ids=person_ids)]
-
-    def _get_primary_child_family_unit_id(self, person_id: str) -> str | None:
-        """读取人物作为伴侣且有子女的首个家庭单元。"""
-        query = """
-        MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE EXISTS { MATCH (unit)-[:HAS_CHILD]->(:Person) }
-        RETURN unit.familyUnitId AS family_unit_id
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        LIMIT 1
-        """
-        record = self.session.run(query, person_id=str(person_id)).single()
-        return str(record["family_unit_id"]) if record and record["family_unit_id"] else None
-
-    def _get_scoped_people(self, scope: str, limit: int) -> tuple[list[Any], int]:
-        """按 all/demo 范围读取人物和总数。"""
-        where_clause = "person.personId STARTS WITH 'demo:'" if scope == "demo" else "true"
-        count_query = f"""
-        MATCH (person:Person)
-        WHERE {where_clause}
-        RETURN count(person) AS total_count
-        """
-        people_query = f"""
-        MATCH (person:Person)
-        WHERE {where_clause}
-        RETURN person
-        ORDER BY person.birthDate, person.name, person.personId
-        LIMIT $limit
-        """
-        total_record = self.session.run(count_query).single()
-        persons = [record["person"] for record in self.session.run(people_query, limit=limit)]
-        return persons, int(total_record["total_count"] if total_record else len(persons))
-
-    def _get_center_spouse_options(self, person_id: str) -> list[dict[str, Any]]:
-        """读取中心人物的配偶/伴侣候选。"""
-        query = """
-        MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)<-[:PARTNER_IN]-(spouse:Person)
-        WHERE spouse.personId <> $person_id
-        OPTIONAL MATCH (unit)-[:HAS_CHILD]->(child:Person)
-        WITH spouse, unit, count(DISTINCT child) AS child_count
-        WITH spouse,
-             unit.familyUnitId AS family_unit_id,
-             child_count,
-             coalesce(unit.displayOrder, 0) AS display_order
-        ORDER BY display_order, spouse.name, spouse.personId
-        RETURN spouse AS person,
-               family_unit_id,
-               child_count
-        """
-        return [
-            {
-                "person": record["person"],
-                "family_unit_id": record["family_unit_id"],
-                "child_count": record["child_count"],
-            }
-            for record in self.session.run(query, person_id=str(person_id))
-        ]
+    # --- 中心人物参数与全景 --- #
 
     def _get_center_family_options(self, person_id: str) -> list[dict[str, Any]]:
-        """读取中心人物可作为后代根或桥接根的家庭单元。"""
-        query = """
-        MATCH (:Person {personId: $person_id})-[:PARTNER_IN]->(unit:FamilyUnit)
-        OPTIONAL MATCH (partner:Person)-[:PARTNER_IN]->(unit)
-        OPTIONAL MATCH (unit)-[:HAS_CHILD]->(child:Person)
-        WITH unit,
-             collect(DISTINCT partner.personId) AS spouse_ids,
-             collect(DISTINCT partner.name) AS spouse_names,
-             count(DISTINCT child) AS child_count
-        WITH unit.familyUnitId AS family_unit_id,
-             coalesce(unit.type, 'marriage') AS family_type,
-             coalesce(unit.label, '家庭单元') AS label,
-             spouse_ids,
-             spouse_names,
-             child_count,
-             coalesce(unit.displayOrder, 0) AS display_order
-        ORDER BY display_order, family_unit_id
-        RETURN family_unit_id,
-               family_type,
-               label,
-               spouse_ids,
-               spouse_names,
-               child_count
-        """
+        """批量读取中心人物的家庭、伴侣和子女人数。"""
+        units = self._get_family_units_for_people([str(person_id)])
+        unit_ids = [unit["familyUnitId"] for unit in units]
+        if not unit_ids:
+            return []
+        partner_rows = list(self.session.scalars(
+            select(FamilyPartner).where(FamilyPartner.family_unit_id.in_(unit_ids))
+        ))
+        partners = {person["personId"]: person for person in self._get_people_by_ids(
+            _unique_ids([row.person_id for row in partner_rows])
+        )}
+        counts = dict(self.session.execute(
+            select(FamilyChild.family_unit_id, func.count(FamilyChild.child_id))
+            .where(FamilyChild.family_unit_id.in_(unit_ids))
+            .group_by(FamilyChild.family_unit_id)
+        ).all())
+        by_unit: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in partner_rows:
+            by_unit[row.family_unit_id].append(partners[row.person_id])
+        options = []
+        for unit in units:
+            unit_id = unit["familyUnitId"]
+            unit_partners = sorted(by_unit[unit_id], key=_person_sort_key)
+            options.append({
+                "family_unit_id": unit_id,
+                "family_type": unit.get("type", "marriage"),
+                "label": unit.get("label", "家庭单元"),
+                "spouse_ids": [person["personId"] for person in unit_partners],
+                "spouse_names": [person["name"] for person in unit_partners],
+                "child_count": counts.get(unit_id, 0),
+            })
+        return options
+
+    def _get_center_spouse_options(self, person_id: str) -> list[dict[str, Any]]:
+        """读取中心人物各家庭单元中的其他伴侣候选。"""
+        families = self._get_center_family_options(person_id)
+        spouse_ids = _unique_ids([
+            spouse_id for family in families for spouse_id in family["spouse_ids"]
+            if spouse_id != str(person_id)
+        ])
+        people = {person["personId"]: person for person in self._get_people_by_ids(spouse_ids)}
         return [
-            {
-                "family_unit_id": record["family_unit_id"],
-                "family_type": record["family_type"],
-                "label": record["label"],
-                "spouse_ids": record["spouse_ids"],
-                "spouse_names": record["spouse_names"],
-                "child_count": record["child_count"],
-            }
-            for record in self.session.run(query, person_id=str(person_id))
+            {"person": people[spouse_id], "family_unit_id": family["family_unit_id"], "child_count": family["child_count"]}
+            for family in families
+            for spouse_id in sorted(family["spouse_ids"], key=lambda value: (people.get(value, {}).get("name", ""), value))
+            if spouse_id != str(person_id)
         ]
 
     def _get_nine_kinship_summary(self, person_id: str) -> dict[str, Any]:
-        """统计中心人物九代包络的轻量摘要。"""
-        query = """
-        MATCH (center:Person {personId: $person_id})
-        OPTIONAL MATCH ancestorPath=(ancestor:Person)-[:PARENT_OF*1..4]->(center)
-        OPTIONAL MATCH descendantPath=(center)-[:PARENT_OF*1..4]->(descendant:Person)
-        WITH center,
-             collect(DISTINCT ancestor) AS ancestors,
-             collect(DISTINCT descendant) AS descendants
-        WITH center, ancestors, descendants, [center] + ancestors + descendants AS visible_people
-        RETURN size(ancestors) AS ancestor_count,
-               size(descendants) AS descendant_count,
-               size(visible_people) AS visible_person_count
-        """
-        record = self.session.run(query, person_id=str(person_id)).single()
-        if not record:
-            return {
-                "ancestor_count": 0,
-                "descendant_count": 0,
-                "visible_person_count": 1,
-                "hidden_relation_count": 0,
-            }
+        """统计中心人物上下四代的直系范围摘要。"""
+        ancestors = self._get_direct_ancestor_person_ids(person_id, 4)
+        descendants = self._get_direct_descendant_person_ids(person_id, 4)
         return {
-            "ancestor_count": int(record["ancestor_count"] or 0),
-            "descendant_count": int(record["descendant_count"] or 0),
-            "visible_person_count": int(record["visible_person_count"] or 1),
+            "ancestor_count": len(ancestors),
+            "descendant_count": len(descendants),
+            "visible_person_count": len(set([str(person_id), *ancestors, *descendants])),
             "hidden_relation_count": 0,
         }
 
-    def _get_scoped_family_units(self, scope: str) -> list[Any]:
-        """按 all/demo 范围读取家庭单元。"""
-        where_clause = "unit.familyUnitId STARTS WITH 'demo:'" if scope == "demo" else "true"
-        query = f"""
-        MATCH (unit:FamilyUnit)
-        WHERE {where_clause}
-        RETURN unit
-        ORDER BY unit.displayOrder, unit.familyUnitId
-        """
-        return [record["unit"] for record in self.session.run(query)]
+    def _get_scoped_people(self, scope: str, limit: int) -> tuple[list[dict[str, Any]], int]:
+        """在数据库中计数并限制 all/demo 全景的人物范围。"""
+        statement = select(GenealogyPerson)
+        count_statement = select(func.count()).select_from(GenealogyPerson)
+        if scope == "demo":
+            predicate = GenealogyPerson.person_id.startswith("demo:")
+            statement = statement.where(predicate)
+            count_statement = count_statement.where(predicate)
+        statement = statement.order_by(
+            GenealogyPerson.properties["birthDate"].as_string().asc().nulls_last(),
+            GenealogyPerson.name,
+            GenealogyPerson.person_id,
+        ).limit(limit)
+        people = [person.to_dict() for person in self.session.scalars(statement)]
+        return people, int(self.session.scalar(count_statement) or 0)
+
+    def _get_scoped_family_units(self, scope: str) -> list[dict[str, Any]]:
+        """读取 all/demo 全景涉及的家庭单元。"""
+        statement = select(FamilyUnit)
+        if scope == "demo":
+            statement = statement.where(FamilyUnit.family_unit_id.startswith("demo:"))
+        return sorted((unit.to_dict() for unit in self.session.scalars(statement)), key=_family_sort_key)
 
     def _get_family_scope_overview(self, family_unit_id: str, limit: int) -> dict[str, Any] | None:
-        """读取单个家庭单元周边的全景子图。"""
-        query = """
-        MATCH (root:FamilyUnit {familyUnitId: $family_unit_id})
-        OPTIONAL MATCH (partner:Person)-[:PARTNER_IN]->(root)
-        OPTIONAL MATCH (root)-[:HAS_CHILD]->(child:Person)
-        WITH root, collect(DISTINCT partner) + collect(DISTINCT child) AS raw_people
-        UNWIND raw_people AS person
-        WITH root, collect(DISTINCT person) AS people
-        RETURN root, people[0..$limit] AS people, size(people) AS total_count
-        """
-        record = self.session.run(
-            query,
-            family_unit_id=str(family_unit_id),
-            limit=limit,
-        ).single()
-        if not record:
+        """读取指定家庭成员及其接触家庭的全景子图。"""
+        root = self._get_family_unit_node(family_unit_id)
+        if root is None:
             return None
-
-        persons = [person for person in record["people"] if person]
-        person_ids = _unique_ids([dict(person).get("personId") for person in persons])
-        family_units = [record["root"], *self._get_family_units_touching_people(person_ids)]
-        family_unit_ids = _unique_ids([dict(unit).get("familyUnitId") for unit in family_units])
-        edges = self._get_edges_for_scope(person_ids, family_unit_ids)
-        total_count = int(record["total_count"] or len(persons))
-        warnings = []
-        if total_count > limit:
-            warnings.append(f"已按上限显示 {limit} / {total_count} 人")
-
-        return {
-            "persons": persons,
-            "family_units": family_units,
-            "hidden_relation_count": max(total_count - limit, 0),
-            "warnings": warnings,
-            **edges,
-        }
-
-    def _expand_people_from_family_units(
-        self,
-        person_ids: list[str],
-        family_unit_ids: list[str],
-    ) -> list[str]:
-        """把家庭单元中的配偶和子女纳入视图人物范围。"""
-        query = """
-        MATCH (person:Person)
-        WHERE person.personId IN $person_ids
-        WITH collect(DISTINCT person.personId) AS seed_ids
-        OPTIONAL MATCH (partner:Person)-[:PARTNER_IN]->(unit:FamilyUnit)
-        WHERE unit.familyUnitId IN $family_unit_ids
-        OPTIONAL MATCH (unit)-[:HAS_CHILD]->(child:Person)
-        WITH seed_ids,
-             collect(DISTINCT partner.personId) AS partner_ids,
-             collect(DISTINCT child.personId) AS child_ids
-        RETURN seed_ids + partner_ids + child_ids AS person_ids
-        """
-        record = self.session.run(
-            query,
-            person_ids=person_ids,
-            family_unit_ids=family_unit_ids,
-        ).single()
-        return _unique_ids(record["person_ids"] if record else person_ids)
-
-    def _get_edges_for_scope(
-        self,
-        person_ids: list[str],
-        family_unit_ids: list[str],
-    ) -> dict[str, list[Any]]:
-        """按人物和家庭单元范围读取边，避免复杂聚合查询卡顿。"""
-        params = {"person_ids": person_ids, "family_unit_ids": family_unit_ids}
-        partner_edges = self._collect_relationships(
-            """
-            MATCH (p:Person)-[rel:PARTNER_IN]->(unit:FamilyUnit)
-            WHERE p.personId IN $person_ids AND unit.familyUnitId IN $family_unit_ids
-            RETURN p AS source, rel, unit AS target
-            """,
-            params,
+        people_ids = _unique_ids([
+            *self._get_partner_person_ids_for_family_unit(family_unit_id),
+            *self._get_child_person_ids_for_family_units([family_unit_id]),
+        ])
+        total_count = len(people_ids)
+        person_ids = people_ids[:limit]
+        units = [root, *self._get_family_units_touching_people(person_ids)]
+        warnings = [f"已按上限显示 {limit} / {total_count} 人"] if total_count > limit else []
+        return self._build_raw_graph(
+            person_ids,
+            [unit["familyUnitId"] for unit in units],
+            warnings=warnings,
+            hidden_relation_count=max(total_count - limit, 0),
         )
-        child_edges = self._collect_relationships(
-            """
-            MATCH (unit:FamilyUnit)-[rel:HAS_CHILD]->(child:Person)
-            WHERE unit.familyUnitId IN $family_unit_ids AND child.personId IN $person_ids
-            RETURN unit AS source, rel, child AS target
-            """,
-            params,
-        )
-        parent_edges = self._collect_relationships(
-            """
-            MATCH (parent:Person)-[rel:PARENT_OF]->(child:Person)
-            WHERE parent.personId IN $person_ids AND child.personId IN $person_ids
-            RETURN parent AS source, rel, child AS target
-            """,
-            params,
-        )
-        spouse_edges = self._collect_relationships(
-            """
-            MATCH (left:Person)-[rel:SPOUSE_OF]-(right:Person)
-            WHERE left.personId IN $person_ids AND right.personId IN $person_ids
-            RETURN left AS source, rel, right AS target
-            """,
-            params,
-        )
-        return {
-            "partner_edges": partner_edges,
-            "child_edges": child_edges,
-            "parent_edges": parent_edges,
-            "spouse_edges": spouse_edges,
-        }
 
-    def _collect_relationships(self, query: str, params: dict[str, Any]) -> list[Any]:
-        """执行边查询并返回关系列表。"""
-        return [
-            {
-                "source": record["source"],
-                "relationship": record["rel"],
-                "target": record["target"],
-            }
-            for record in self.session.run(query, **params)
-        ]
+    def _expand_people_from_family_units(self, person_ids: list[str], family_unit_ids: list[str]) -> list[str]:
+        """把指定家庭的伴侣和直接子女补入已裁剪人物范围。"""
+        return _unique_ids([
+            *person_ids,
+            *[person["personId"] for person in self._get_partners_for_family_units(family_unit_ids)],
+            *self._get_child_person_ids_for_family_units(family_unit_ids),
+        ])
+
+    # --- 范围内关系组装 --- #
+
+    def _get_edges_for_scope(self, person_ids: list[str], family_unit_ids: list[str]) -> dict[str, list[Any]]:
+        """只读取端点已纳入视图的关系，返回普通字典。"""
+        people = {person["personId"]: person for person in self._get_people_by_ids(person_ids)}
+        families = {unit["familyUnitId"]: unit for unit in self._get_family_units_by_ids(family_unit_ids)}
+        result = {"partner_edges": [], "child_edges": [], "parent_edges": [], "spouse_edges": []}
+        if not people:
+            return result
+        partner_rows = self.session.scalars(select(FamilyPartner).where(
+            FamilyPartner.person_id.in_(person_ids), FamilyPartner.family_unit_id.in_(family_unit_ids)
+        ))
+        for row in partner_rows:
+            result["partner_edges"].append(_edge_record(
+                "PARTNER_IN", people[row.person_id], families[row.family_unit_id], row.to_dict()
+            ))
+        child_rows = self.session.scalars(select(FamilyChild).where(
+            FamilyChild.child_id.in_(person_ids), FamilyChild.family_unit_id.in_(family_unit_ids)
+        ))
+        for row in child_rows:
+            result["child_edges"].append(_edge_record(
+                "HAS_CHILD", families[row.family_unit_id], people[row.child_id], row.to_dict()
+            ))
+        parent_rows = self.session.scalars(select(ParentChild).where(
+            ParentChild.parent_id.in_(person_ids), ParentChild.child_id.in_(person_ids)
+        ))
+        for row in parent_rows:
+            result["parent_edges"].append(_edge_record(
+                "PARENT_OF", people[row.parent_id], people[row.child_id], row.to_dict()
+            ))
+        spouse_rows = self.session.scalars(select(Spouse).where(
+            Spouse.person_a_id.in_(person_ids), Spouse.person_b_id.in_(person_ids)
+        ))
+        for row in spouse_rows:
+            result["spouse_edges"].append(_edge_record(
+                "SPOUSE_OF", people[row.person_a_id], people[row.person_b_id], row.to_dict()
+            ))
+        for edges in result.values():
+            edges.sort(key=lambda edge: edge["relationship"]["id"])
+        return result
+
+
+# --- 查询边界与原始记录转换 --- #
 
 
 def _safe_depth(depth: int) -> int:
-    """把查询深度限制在安全范围内。"""
+    """把展开深度限制在一到十代。"""
     return min(max(int(depth), 1), 10)
 
 
 def _safe_limit(limit: int) -> int:
-    """把全景节点上限限制在安全范围内。"""
+    """把全景人物上限限制在一到一千人。"""
     return min(max(int(limit), 1), 1000)
 
 
-def _record_to_dict(record) -> dict[str, Any]:
-    """把 Neo4j Record 转成普通字典。"""
-    return {key: record[key] for key in record.keys()}
-
-
 def _unique_ids(values: list[str]) -> list[str]:
-    """保留顺序去重 ID 列表。"""
-    seen = set()
-    result = []
-    for value in values:
-        if value and value not in seen:
-            seen.add(value)
-            result.append(value)
-    return result
+    """保留首次出现顺序并去除重复及空 ID。"""
+    return list(dict.fromkeys(value for value in values if value))
 
 
 def _unique_strings(values: list[str]) -> list[str]:
-    """保留顺序去重字符串列表。"""
-    seen = set()
-    result = []
-    for value in values:
-        if value and value not in seen:
-            seen.add(value)
-            result.append(value)
-    return result
+    """保留首次出现顺序并去除重复及空提示。"""
+    return list(dict.fromkeys(value for value in values if value))
 
 
-def _merge_raw_graphs(*graphs: dict[str, Any]) -> dict[str, Any]:
-    """合并多个原始图记录并按节点/边标识去重。"""
-    merged: dict[str, Any] = {
-        "persons": [],
-        "family_units": [],
-        "partner_edges": [],
-        "child_edges": [],
-        "parent_edges": [],
-        "spouse_edges": [],
-        "warnings": [],
-        "hidden_relation_count": 0,
+def _person_sort_key(person: dict[str, Any]) -> tuple[bool, str, str, str]:
+    """按出生日期、姓名和稳定 ID 排序，未知日期放末尾。"""
+    birth_date = person.get("birthDate")
+    return (not bool(birth_date), str(birth_date or ""), str(person.get("name", "")), person["personId"])
+
+
+def _family_sort_key(unit: dict[str, Any]) -> tuple[int, str]:
+    """按家庭展示顺序及稳定 ID 排序。"""
+    return (int(unit.get("displayOrder", 0) or 0), unit["familyUnitId"])
+
+
+def _relationship_dict(relation_type: str, source_id: str, target_id: str, properties: dict[str, Any]) -> dict[str, Any]:
+    """生成数据库无关的关系字典，端点编码防止复合 ID 冲突。"""
+    relation_id = f"{relation_type}:{quote(source_id, safe='')}:{quote(target_id, safe='')}"
+    if relation_type == "PARENT_OF":
+        relation_id += f":{quote(properties['relationKind'], safe='')}"
+    return {
+        **properties,
+        "id": relation_id,
+        "type": relation_type,
+        "source": source_id,
+        "target": target_id,
     }
-    seen_person_ids = set()
-    seen_family_ids = set()
-    seen_edge_ids = set()
 
-    for graph in graphs:
-        for person in graph.get("persons", []):
-            person_id = dict(person).get("personId")
-            if person_id and person_id not in seen_person_ids:
-                merged["persons"].append(person)
-                seen_person_ids.add(person_id)
 
-        for unit in graph.get("family_units", []):
-            unit_id = dict(unit).get("familyUnitId")
-            if unit_id and unit_id not in seen_family_ids:
-                merged["family_units"].append(unit)
-                seen_family_ids.add(unit_id)
+def _edge_record(relation_type: str, source: dict[str, Any], target: dict[str, Any], properties: dict[str, Any]) -> dict[str, Any]:
+    """把关系表记录转换为视图服务使用的边记录。"""
+    source_id = source["personId"] if "personId" in source else source["familyUnitId"]
+    target_id = target["personId"] if "personId" in target else target["familyUnitId"]
+    return {
+        "source": source,
+        "relationship": _relationship_dict(relation_type, source_id, target_id, properties),
+        "target": target,
+    }
 
-        for key in ("partner_edges", "child_edges", "parent_edges", "spouse_edges"):
-            for edge in graph.get(key, []):
-                relationship = edge.get("relationship") if isinstance(edge, dict) else edge
-                edge_id = getattr(relationship, "element_id", id(edge))
-                edge_key = f"{key}:{edge_id}"
-                if edge_key in seen_edge_ids:
-                    continue
-                merged[key].append(edge)
-                seen_edge_ids.add(edge_key)
 
-        merged["warnings"].extend(graph.get("warnings", []))
-        merged["hidden_relation_count"] += int(graph.get("hidden_relation_count", 0) or 0)
+def _issue(person: GenealogyPerson, issue_type: str, message: str) -> dict[str, Any]:
+    """生成管理员诊断记录。"""
+    return {"person": person.to_dict(), "issue_type": issue_type, "message": message}
 
-    return merged
+
+def _has_ancestor_cycle(person_id: str, children: dict[str, set[str]]) -> bool:
+    """检查人物是否在十二条亲子边以内回到自身。"""
+    seen = set()
+    frontier = {person_id}
+    for _ in range(12):
+        next_frontier = {child_id for current in frontier for child_id in children.get(current, set())}
+        if person_id in next_frontier:
+            return True
+        frontier = next_frontier - seen
+        if not frontier:
+            return False
+        seen.update(frontier)
+    return False

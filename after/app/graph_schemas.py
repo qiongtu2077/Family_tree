@@ -203,14 +203,38 @@ class LayoutHintUpdate(BaseModel):
     display_order: int | None = None
 
 
+RelationPathKind = Literal[
+    "self",
+    "blood_lineal",
+    "blood_sibling",
+    "blood_collateral",
+    "spouse",
+    "inlaw",
+    "unknown",
+]
+
+
+class RelationPathCandidate(BaseModel):
+    """候选关系路径。"""
+
+    relation_text: str
+    relation_kind: RelationPathKind = "unknown"
+    path_description: str
+    score: int = 0
+    path: GraphViewResponse
+
+
 class RelationPathResponse(BaseModel):
     """两人关系路径查询结果。"""
 
     from_person_id: str
     to_person_id: str
     relation_text: str
+    relation_kind: RelationPathKind = "unknown"
+    path_description: str = ""
     path: GraphViewResponse
     alternative_count: int = 0
+    candidates: list[RelationPathCandidate] = Field(default_factory=list)
 
 
 class GraphIssue(BaseModel):

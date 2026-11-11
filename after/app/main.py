@@ -1,12 +1,13 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from .config import get_settings
 from .database import engine, Base
-from .neo4j import close_driver
 from .routers import admin, auth, family_units, genealogy, graph, persons, relationships
 
 """
@@ -16,8 +17,14 @@ FastAPI 应用主入口
 
 settings = get_settings()
 
-# 旧 SQLAlchemy 表仍用于兼容登录、注册和上传接口。
-Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动时初始化统一数据库，退出时释放连接池。"""
+    Base.metadata.create_all(bind=engine)
+    try:
+        yield
+    finally:
+        engine.dispose()
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 os.makedirs(os.path.join(UPLOAD_DIR, "avatars"), exist_ok=True)
@@ -25,10 +32,11 @@ os.makedirs(os.path.join(UPLOAD_DIR, "photos"), exist_ok=True)
 
 app = FastAPI(
     title=settings.app_name,
-    description="基于 FastAPI + Neo4j 的族谱查询和显示系统",
+    description="基于 FastAPI + PostgreSQL 的族谱查询和显示系统",
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -50,12 +58,6 @@ app.include_router(relationships.router)
 app.include_router(admin.router)
 
 
-@app.on_event("shutdown")
-def shutdown_event():
-    """应用关闭时释放 Neo4j Driver。"""
-    close_driver()
-
-
 @app.get("/")
 def root():
     """根路径，返回 API 信息。"""
@@ -69,5 +71,7 @@ def root():
 
 @app.get("/health")
 def health_check():
-    """健康检查接口。"""
-    return {"status": "ok", "database": "neo4j-ready"}
+    """查询数据库确认实际可用后返回健康状态。"""
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
+    return {"status": "ok", "database": "postgresql"}

@@ -1,246 +1,180 @@
-"""
-族谱关系处理服务
-使用 NetworkX 处理复杂的家族关系查询
-"""
-import networkx as nx
-from typing import List, Dict, Set
+"""旧族谱树接口的数据适配，统一读取人物与亲缘关系表。"""
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Any
+
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
-from ..models import Person
+
+from ..graph_models import FamilyChild, FamilyPartner, GenealogyPerson, ParentChild, Spouse
 
 
-def build_family_graph(db: Session) -> nx.DiGraph:
-    """
-    从数据库构建族谱图
-    
-    Args:
-        db: 数据库会话
-        
-    Returns:
-        NetworkX 有向图对象
-    """
-    persons = db.query(Person).all()
-    G = nx.DiGraph()
-    
-    for person in persons:
-        G.add_node(
-            person.id, 
-            name=person.name, 
-            gender=person.gender,
-            birth_date=str(person.birth_date) if person.birth_date else None,
-            is_alive=person.is_alive
-        )
-        if person.father_id:
-            G.add_edge(person.father_id, person.id, relation='father')
-        if person.mother_id:
-            G.add_edge(person.mother_id, person.id, relation='mother')
-    
-    return G
+# --- 旧响应字段与父母信息 --- #
 
 
-def get_ancestors(db: Session, person_id: int, generations: int = 3) -> Set[int]:
-    """
-    获取指定代数内的所有祖先
-    
-    Args:
-        db: 数据库会话
-        person_id: 起始人员ID
-        generations: 向上追溯的代数（默认3代）
-        
-    Returns:
-        祖先ID集合
-    """
-    G = build_family_graph(db)
-    ancestors = set()
-    
-    def traverse(node_id: int, depth: int):
-        """递归遍历祖先"""
-        if depth >= generations:
-            return
-        # 图的边方向是"父→子"，所以用 predecessors 获取父节点（指向该节点的节点）
-        for parent_id in G.predecessors(node_id):
-            if parent_id not in ancestors:
-                ancestors.add(parent_id)
-                traverse(parent_id, depth + 1)
-    
-    traverse(person_id, 0)
-    return ancestors
+PERSON_FIELD_NAMES = {
+    "birth_date": "birthDate",
+    "death_date": "deathDate",
+    "is_alive": "isAlive",
+    "avatar": "avatar",
+    "occupation": "occupation",
+    "address": "address",
+    "motto": "motto",
+    "achievements": "achievements",
+    "biography": "biography",
+}
 
 
-def get_descendants(db: Session, person_id: int, generations: int = 3) -> Set[int]:
-    """
-    获取指定代数内的所有后代
-    
-    Args:
-        db: 数据库会话
-        person_id: 起始人员ID
-        generations: 向下追溯的代数（默认3代）
-        
-    Returns:
-        后代ID集合
-    """
-    G = build_family_graph(db)
-    descendants = set()
-    
-    def traverse(node_id: int, depth: int):
-        """递归遍历后代"""
-        if depth >= generations:
-            return
-        # 图的边方向是"父→子"，所以用 successors 获取子节点（该节点指向的节点）
-        for child_id in G.successors(node_id):
-            if child_id not in descendants:
-                descendants.add(child_id)
-                traverse(child_id, depth + 1)
-    
-    traverse(person_id, 0)
-    return descendants
-
-
-def get_siblings(db: Session, person_id: int) -> Set[int]:
-    """
-    获取所有兄弟姐妹（包括同父异母、同母异父、同父同母）
-    
-    Args:
-        db: 数据库会话
-        person_id: 起始人员ID
-        
-    Returns:
-        兄弟姐妹ID集合（不包括自己）
-    """
-    person = db.query(Person).filter(Person.id == person_id).first()
-    if not person:
-        return set()
-    
-    siblings = set()
-    
-    # 如果有父亲，获取所有同父的兄弟姐妹
-    if person.father_id:
-        same_father = db.query(Person).filter(
-            Person.father_id == person.father_id,
-            Person.id != person_id
-        ).all()
-        siblings.update([p.id for p in same_father])
-    
-    # 如果有母亲，获取所有同母的兄弟姐妹
-    if person.mother_id:
-        same_mother = db.query(Person).filter(
-            Person.mother_id == person.mother_id,
-            Person.id != person_id
-        ).all()
-        siblings.update([p.id for p in same_mother])
-    
-    return siblings
-
-
-def get_family_tree_data(db: Session, person_id: int, generations: int = 5) -> Dict:
-    """
-    获取族谱树数据（用于 G6 可视化）
-    包含完整的家族分支，包括兄弟姐妹和所有配偶，不删除任何节点
-    
-    Args:
-        db: 数据库会话
-        person_id: 中心人员ID
-        generations: 向上和向下各追溯的代数（默认5代，确保显示完整）
-        
-    Returns:
-        包含 nodes 和 edges 的字典
-    """
-    # 获取所有相关人员的ID（包括祖先、后代和兄弟姐妹）
-    ancestors = get_ancestors(db, person_id, generations)
-    descendants = get_descendants(db, person_id, generations)
-    siblings = get_siblings(db, person_id)
-    
-    # 还需要获取兄弟姐妹的祖先和后代，以确保完整显示
-    all_sibling_ancestors = set()
-    all_sibling_descendants = set()
-    for sibling_id in siblings:
-        all_sibling_ancestors.update(get_ancestors(db, sibling_id, generations))
-        all_sibling_descendants.update(get_descendants(db, sibling_id, generations))
-    
-    # 合并所有相关人员ID
-    all_person_ids = ancestors | descendants | siblings | {person_id} | all_sibling_ancestors | all_sibling_descendants
-    
-    # 查询所有相关人员
-    persons = db.query(Person).filter(Person.id.in_(all_person_ids)).all()
-    
-    # 重要：确保所有后代的父母都被包含（包括配偶）
-    # 例如：如果张小明在 descendants 中，他的母亲李妈妈也应该被包含
-    additional_parents = set()
-    for person in persons:
-        if person.father_id and person.father_id not in all_person_ids:
-            additional_parents.add(person.father_id)
-        if person.mother_id and person.mother_id not in all_person_ids:
-            additional_parents.add(person.mother_id)
-    
-    # 如果找到了额外的父母，需要递归包含他们的关系
-    if additional_parents:
-        all_person_ids.update(additional_parents)
-        # 重新查询，包含额外的父母
-        persons = db.query(Person).filter(Person.id.in_(all_person_ids)).all()
-        # 再次检查是否有更多需要包含的父母
-        max_iterations = 3  # 防止无限循环
-        for _ in range(max_iterations):
-            new_parents = set()
-            for person in persons:
-                if person.father_id and person.father_id not in all_person_ids:
-                    new_parents.add(person.father_id)
-                if person.mother_id and person.mother_id not in all_person_ids:
-                    new_parents.add(person.mother_id)
-            if not new_parents:
-                break
-            all_person_ids.update(new_parents)
-            persons = db.query(Person).filter(Person.id.in_(all_person_ids)).all()
-    
-    # 构建节点和边
-    nodes = []
-    edges = []
-    person_dict = {p.id: p for p in persons}
-    # 使用集合来避免重复边
-    edges_set = set()
-    
-    # 先添加所有人员节点（包含完整信息，用于前端显示）
-    for person in persons:
-        nodes.append({
-            "id": str(person.id),
-            "label": person.name,
-            "gender": person.gender,
-            "birth_date": str(person.birth_date) if person.birth_date else None,
-            "death_date": str(person.death_date) if person.death_date else None,
-            "is_alive": person.is_alive,
-            "father_id": str(person.father_id) if person.father_id else None,
-            "mother_id": str(person.mother_id) if person.mother_id else None,
-            "occupation": person.occupation,
-            "address": person.address,
-            "motto": person.motto,
-            "achievements": person.achievements,
-            "biography": person.biography,
-            "avatar": person.avatar
+def get_parent_links(db: Session, person_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """批量读取人物全部亲子事实，旧父母字段仅由生育关系推导。"""
+    links: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if not person_ids:
+        return links
+    rows = db.execute(
+        select(ParentChild, GenealogyPerson)
+        .join(GenealogyPerson, GenealogyPerson.person_id == ParentChild.parent_id)
+        .where(ParentChild.child_id.in_(person_ids))
+        .order_by(ParentChild.parent_id, ParentChild.relation_kind)
+    )
+    for relation, parent in rows:
+        links[relation.child_id].append({
+            **relation.to_dict(),
+            "parent_id": relation.parent_id,
+            "parent_name": parent.name,
+            "side": relation.properties.get("side", "parent"),
+            "relation_kind": relation.relation_kind,
         })
-    
-    # 暂时移除虚拟婚姻节点，先确保基本功能正常
-    # 直接添加所有父子/母子关系
-    for person in persons:
-        if person.father_id and person.father_id in person_dict:
-            edge_key = (str(person.father_id), str(person.id), "father")
-            if edge_key not in edges_set:
-                edges.append({
-                    "source": str(person.father_id),
-                    "target": str(person.id),
-                    "relation": "father"
-                })
-                edges_set.add(edge_key)
-        
-        if person.mother_id and person.mother_id in person_dict:
-            edge_key = (str(person.mother_id), str(person.id), "mother")
-            if edge_key not in edges_set:
-                edges.append({
-                    "source": str(person.mother_id),
-                    "target": str(person.id),
-                    "relation": "mother"
-                })
-                edges_set.add(edge_key)
-    
-    return {
-        "nodes": nodes,
-        "edges": edges
-    }
+    return links
 
+
+def serialize_person(person: dict[str, Any], parent_links: list[dict[str, Any]]) -> dict[str, Any]:
+    """将统一人物属性转换为旧接口字段，并保留完整父母事实和照片列表。"""
+    result = {
+        "id": person["personId"],
+        "name": person["name"],
+        "gender": person["gender"],
+        **{field: person.get(attribute) for field, attribute in PERSON_FIELD_NAMES.items()},
+        "parent_relations": parent_links,
+        "photos": person.get("photos", []),
+    }
+    result["is_alive"] = person.get("isAlive", True)
+    for side in ("father", "mother"):
+        parents = {
+            link["parent_id"]: link["parent_name"] for link in parent_links
+            if link["side"] == side and link["relation_kind"] == "biological"
+        }
+        # 旧单值字段不能代表多位父母；详情中的 parent_relations 保留所有事实。
+        unique_id = next(iter(parents)) if len(parents) == 1 else None
+        result[f"{side}_id"] = unique_id
+        result[f"{side}_name"] = parents[unique_id] if unique_id is not None else None
+    return result
+
+
+# --- 有界亲缘遍历 --- #
+
+
+def _lineal_person_ids(db: Session, person_id: str, generations: int, *, ancestors: bool) -> set[str]:
+    """逐代查询必要亲子邻接，避免每次查询都在内存构建全库图。"""
+    source = ParentChild.child_id if ancestors else ParentChild.parent_id
+    target = ParentChild.parent_id if ancestors else ParentChild.child_id
+    seen = {str(person_id)}
+    frontier = {str(person_id)}
+    result = set()
+    for _ in range(min(max(int(generations), 1), 10)):
+        adjacent = set(db.scalars(select(target).where(source.in_(frontier)).distinct()))
+        frontier = adjacent - seen
+        if not frontier:
+            break
+        seen.update(frontier)
+        result.update(frontier)
+    return result
+
+
+def get_ancestors(db: Session, person_id: str, generations: int = 3) -> set[str]:
+    """返回指定代数以内的祖先稳定 ID。"""
+    return _lineal_person_ids(db, person_id, generations, ancestors=True)
+
+
+def get_descendants(db: Session, person_id: str, generations: int = 3) -> set[str]:
+    """返回指定代数以内的后代稳定 ID。"""
+    return _lineal_person_ids(db, person_id, generations, ancestors=False)
+
+
+def get_siblings(db: Session, person_id: str) -> set[str]:
+    """读取至少共享一位父母的同胞，包括生育与收养家庭事实。"""
+    parent_ids = list(db.scalars(select(ParentChild.parent_id).where(
+        ParentChild.child_id == str(person_id),
+    ).distinct()))
+    if not parent_ids:
+        return set()
+    return set(db.scalars(select(ParentChild.child_id).where(
+        ParentChild.parent_id.in_(parent_ids), ParentChild.child_id != str(person_id),
+    ).distinct()))
+
+
+# --- 旧树接口投影 --- #
+
+
+def get_family_tree_data(db: Session, person_id: str, generations: int = 5) -> dict[str, list[dict[str, Any]]]:
+    """用统一关系数据返回旧客户端需要的人物节点和直接亲缘边。"""
+    person_id = str(person_id)
+    siblings = get_siblings(db, person_id)
+    person_ids = {
+        person_id,
+        *get_ancestors(db, person_id, generations),
+        *get_descendants(db, person_id, generations),
+        *siblings,
+    }
+    for sibling_id in sorted(siblings):
+        person_ids.update(get_ancestors(db, sibling_id, generations))
+        person_ids.update(get_descendants(db, sibling_id, generations))
+
+    # 沿用旧接口补齐配偶父母的范围，最多额外向上扩展四轮。
+    for _ in range(4):
+        parent_ids = set(db.scalars(select(ParentChild.parent_id).where(
+            ParentChild.child_id.in_(person_ids),
+        ).distinct()))
+        additional_ids = parent_ids - person_ids
+        if not additional_ids:
+            break
+        person_ids.update(additional_ids)
+
+    partner_unit_ids = set(db.scalars(select(FamilyPartner.family_unit_id).where(
+        FamilyPartner.person_id.in_(person_ids),
+    )))
+    child_unit_ids = set(db.scalars(select(FamilyChild.family_unit_id).where(
+        FamilyChild.child_id.in_(person_ids),
+    )))
+    family_ids = partner_unit_ids | child_unit_ids
+    if family_ids:
+        person_ids.update(db.scalars(select(FamilyPartner.person_id).where(
+            FamilyPartner.family_unit_id.in_(family_ids),
+        )))
+    spouse_rows = list(db.scalars(select(Spouse).where(or_(
+        Spouse.person_a_id.in_(person_ids), Spouse.person_b_id.in_(person_ids),
+    ))))
+    for spouse in spouse_rows:
+        person_ids.update((spouse.person_a_id, spouse.person_b_id))
+
+    people = list(db.scalars(select(GenealogyPerson).where(
+        GenealogyPerson.person_id.in_(person_ids),
+    ).order_by(GenealogyPerson.name, GenealogyPerson.person_id)))
+    parent_links = get_parent_links(db, [person.person_id for person in people])
+    nodes = []
+    for person in people:
+        node = serialize_person(person.to_dict(), parent_links[person.person_id])
+        node["label"] = node.pop("name")
+        nodes.append(node)
+
+    relations = db.scalars(select(ParentChild).where(
+        ParentChild.parent_id.in_(person_ids), ParentChild.child_id.in_(person_ids),
+    ).order_by(ParentChild.parent_id, ParentChild.child_id, ParentChild.relation_kind))
+    edges = [{
+        "source": relation.parent_id,
+        "target": relation.child_id,
+        "relation": relation.properties.get("side", "parent") if relation.relation_kind == "biological" else relation.relation_kind,
+    } for relation in relations]
+    edges.extend({"source": spouse.person_a_id, "target": spouse.person_b_id, "relation": "spouse"}
+                 for spouse in spouse_rows)
+    return {"nodes": nodes, "edges": edges}

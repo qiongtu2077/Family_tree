@@ -1,0 +1,24 @@
+name: familytree
+
+services:
+  postgres:
+    image: postgres:18
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: familytree
+      POSTGRES_USER: familytree
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your shell or deploy/.env}
+    volumes:
+      # PostgreSQL 18 使用版本子目录，挂载父目录以持久化整个实例。
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

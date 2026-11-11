@@ -1,6 +1,6 @@
 /**
  * 族谱图谱 API
- * 对应后端 Neo4j 图谱接口。
+ * 对应后端统一 PostgreSQL 图谱接口。
  */
 import { apiClient, unwrap } from './http'
 

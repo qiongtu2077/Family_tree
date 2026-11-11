@@ -24,8 +24,8 @@ class PersonBase(BaseModel):
 
 class PersonCreate(PersonBase):
     """创建人员时的数据模型"""
-    father_id: Optional[int] = Field(None, description="父亲ID（可选）")
-    mother_id: Optional[int] = Field(None, description="母亲ID（可选）")
+    father_id: Optional[str] = Field(None, description="父亲稳定ID（关系变更使用关系接口）")
+    mother_id: Optional[str] = Field(None, description="母亲稳定ID（关系变更使用关系接口）")
 
 
 class PersonUpdate(BaseModel):
@@ -41,8 +41,8 @@ class PersonUpdate(BaseModel):
     achievements: Optional[str] = None
     biography: Optional[str] = None
     avatar: Optional[str] = None
-    father_id: Optional[int] = None
-    mother_id: Optional[int] = None
+    father_id: Optional[str] = None
+    mother_id: Optional[str] = None
 
 
 class PersonProfileUpdate(BaseModel):
@@ -56,9 +56,9 @@ class PersonProfileUpdate(BaseModel):
 
 class PersonResponse(PersonBase):
     """返回人员信息时的数据模型"""
-    id: int
-    father_id: Optional[int] = None
-    mother_id: Optional[int] = None
+    id: str
+    father_id: Optional[str] = None
+    mother_id: Optional[str] = None
     
     class Config:
         from_attributes = True  # 允许从 ORM 对象创建
@@ -114,7 +114,7 @@ class UserResponse(UserBase):
     id: int
     is_admin: bool
     is_active: bool
-    person_id: Optional[int] = None
+    person_id: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -143,7 +143,7 @@ class RegisterRequest(BaseModel):
 
 class PersonDetailResponse(BaseModel):
     """人员详情响应（包含完整信息）"""
-    id: int
+    id: str
     name: str
     gender: str
     avatar: Optional[str] = None
@@ -155,8 +155,8 @@ class PersonDetailResponse(BaseModel):
     motto: Optional[str] = None
     achievements: Optional[str] = None
     biography: Optional[str] = None
-    father_id: Optional[int] = None
-    mother_id: Optional[int] = None
+    father_id: Optional[str] = None
+    mother_id: Optional[str] = None
     father_name: Optional[str] = None
     mother_name: Optional[str] = None
     can_edit: bool = False  # 当前用户是否可以编辑

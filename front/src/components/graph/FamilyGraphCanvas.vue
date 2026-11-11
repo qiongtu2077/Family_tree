@@ -26,6 +26,7 @@ let graphInstance = null
 let g6Promise = null
 let hoveredNodeId = null
 let dragSample = null
+let lastLayoutData = { nodes: [], edges: [] }
 
 /**
  * 初始化 G6 实例。
@@ -106,6 +107,11 @@ async function ensureGraph() {
     animateCanvasDrift()
   })
 
+  // changeData 的节点动画完成后再适配视口，避免按旧位置计算可见范围。
+  graphInstance.on('afteranimate', () => {
+    graphInstance.fitView(60)
+  })
+
   window.addEventListener('resize', resizeGraph)
   return graphInstance
 }
@@ -119,13 +125,17 @@ async function renderGraph() {
   if (!instance || props.isLoading) return
 
   if (!props.graph.nodes.length) {
+    lastLayoutData = { nodes: [], edges: [] }
     instance.changeData({ nodes: [], edges: [] })
+    exposeGraphDebugState()
     return
   }
 
   const data = await layoutGraph(props.graph)
+  lastLayoutData = data
   instance.changeData(data)
-  instance.fitView(60)
+  if (!instance.isAnimating()) instance.fitView(60)
+  exposeGraphDebugState()
 
   if (props.centerPersonId) {
     setSelectedNode(props.centerPersonId)
@@ -253,6 +263,41 @@ function setSelectedNode(nodeId) {
 }
 
 /**
+ * 在开发和测试环境暴露只读画布状态，供 E2E 视觉巡检定位分支胶囊。
+ */
+function exposeGraphDebugState() {
+  if (!import.meta.env.DEV || !containerRef.value) return
+  window.__familyTreeGraphDebug = {
+    getLayout: () => lastLayoutData,
+    getCapsules: () => lastLayoutData.nodes.filter(node => node.nodeType === 'branchCapsule'),
+    getState: () => ({
+      isAnimating: Boolean(graphInstance?.isAnimating()),
+      viewMode: props.graph.view_mode || '',
+      rawNodeCount: props.graph.nodes.length,
+      rawEdgeCount: props.graph.edges?.length || 0,
+      layoutNodeCount: lastLayoutData.nodes.length,
+      layoutEdgeCount: lastLayoutData.edges.length,
+      capsuleCount: lastLayoutData.nodes.filter(node => node.nodeType === 'branchCapsule').length
+    }),
+    getViewportPoint: nodeId => {
+      if (!graphInstance || !containerRef.value) return null
+      const node = lastLayoutData.nodes.find(item => item.id === nodeId)
+      if (!node) return null
+      const canvasPoint = graphInstance.getCanvasByPoint(node.x, node.y)
+      const rect = containerRef.value.getBoundingClientRect()
+      return {
+        x: rect.left + canvasPoint.x,
+        y: rect.top + canvasPoint.y
+      }
+    },
+    openCapsule: capsuleId => {
+      const capsule = lastLayoutData.nodes.find(node => node.id === capsuleId && node.nodeType === 'branchCapsule')
+      if (capsule) emit('selectCapsule', capsule.raw)
+    }
+  }
+}
+
+/**
  * 清除所有选中状态。
  */
 function clearSelectedNodes() {
@@ -284,6 +329,9 @@ onBeforeUnmount(() => {
   if (graphInstance) {
     graphInstance.destroy()
     graphInstance = null
+  }
+  if (import.meta.env.DEV && window.__familyTreeGraphDebug) {
+    delete window.__familyTreeGraphDebug
   }
 })
 </script>

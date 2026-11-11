@@ -1,18 +1,18 @@
 """
-Neo4j 家庭单元 API
+PostgreSQL 家庭单元 API
 负责创建婚姻、伴侣、单亲、未知父母等家庭单元。
 """
 from fastapi import APIRouter, Depends
 
 from ..graph_schemas import FamilyUnitCreate, GraphFamilyUnit
-from ..neo4j import get_neo4j_session
+from ..database import get_db
 from ..repositories.person_repository import PersonRepository
 
-router = APIRouter(prefix="/api/family-units", tags=["Neo4j 家庭单元"])
+router = APIRouter(prefix="/api/family-units", tags=["PostgreSQL 家庭单元"])
 
 
 @router.post("", response_model=GraphFamilyUnit, status_code=201)
-def create_family_unit(payload: FamilyUnitCreate, session=Depends(get_neo4j_session)):
+def create_family_unit(payload: FamilyUnitCreate, session=Depends(get_db)):
     """创建家庭单元。"""
     repository = PersonRepository(session)
     unit = repository.create_family_unit(

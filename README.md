@@ -1,20 +1,20 @@
 # 族谱系统
 
-基于 FastAPI、Neo4j、Vue 3 与 AntV G6 的族谱管理与可视化系统。系统以 `Person + FamilyUnit` 图模型组织家族关系，支持登录鉴权、人物管理、家谱图浏览、亲缘路径查询、管理员诊断与旧数据迁移。
+基于 FastAPI、PostgreSQL、Vue 3 与 AntV G6 的族谱管理与可视化系统。账号、人物、家庭单元及亲缘关系统一保存在 PostgreSQL；通过关系表和图查询服务提供家谱视图、亲缘路径与异常诊断。
 
 ## 核心能力
 
-- 登录与角色权限：区分普通用户与管理员访问能力。
-- 家谱图展示：围绕中心人物展示祖先、后代、配偶与家庭单元。
-- 关系路径查询：查询两个人之间的亲缘路径，并返回可读的中文解释。
-- 后代分支浏览：从家庭单元向下展开后代关系。
+- 登录与角色权限：普通用户与管理员权限区分。
+- 人物、家庭单元与关系管理：维护伴侣、子女和亲子关系。
+- 家谱图展示：围绕中心人物查看祖先、后代、配偶和家庭单元。
+- 关系路径查询：查询两人之间的亲缘路径并生成中文解释。
 - 管理员诊断：检测孤立人物、多重生父/生母、祖先循环等异常关系。
-- 数据迁移：保留旧 SQLAlchemy 数据入口，并支持迁移到 Neo4j 图数据库。
+- 旧数据迁移：保留原 SQLite 文件和 Neo4j 数据卷，导入 PostgreSQL 后核对。
 
 ## 技术栈
 
-- 后端：FastAPI、Neo4j Python Driver、SQLAlchemy。
-- 数据库：Neo4j 作为核心图数据库，SQLite 用于兼容本地账号数据。
+- 后端：FastAPI、SQLAlchemy、Psycopg 3。
+- 数据库：PostgreSQL 18，统一存储账号与族谱数据。
 - 前端：Vue 3、Vite、AntV G6、自定义家谱投影布局。
 - 测试：pytest、Vitest coverage。
 - 部署：Docker Compose、Nginx。
@@ -25,93 +25,93 @@
 Family_tree/
 ├── after/
 │   ├── app/
-│   │   ├── repositories/     # Neo4j 数据访问层
+│   │   ├── repositories/     # PostgreSQL 数据访问层
 │   │   ├── routers/          # API 路由
-│   │   ├── services/         # 图谱、关系路径、校验、迁移服务
+│   │   ├── services/         # 图谱、路径查询、校验与迁移服务
 │   │   └── tests/            # 后端测试
+│   ├── uploads/              # 头像与照片，独立持久化
+│   ├── .env.example
 │   └── requirements.txt
 ├── front/
 │   ├── src/
-│   │   ├── api/              # 前端 API
-│   │   ├── components/       # 图谱与管理组件
-│   │   ├── composables/      # 数据、布局、交互逻辑
-│   │   ├── tests/            # 前端测试
-│   │   └── views/
 │   └── package.json
 ├── deploy/
-│   ├── docker-compose.neo4j.yml
-│   └── docker-compose.yml
+│   ├── docker-compose.postgres.yml  # 只启动本地 PostgreSQL
+│   ├── docker-compose.yml           # 完整应用部署
+│   ├── docker-compose.neo4j.yml     # 仅保留为历史迁移源
+│   └── README.md
 └── 方案/
 ```
 
-## 环境变量
+## 本地开发
 
-后端 `.env` 示例：
+无需另外安装 PostgreSQL 桌面程序；已有 Docker Desktop 时可直接运行官方 PostgreSQL 镜像。没有 Docker 时也可安装 PostgreSQL 18，再按相同连接参数配置。
 
-```text
-DATABASE_URL=sqlite:///./family_tree.db
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=<your-neo4j-password>
-NEO4J_DATABASE=neo4j
-SERVER_URL=http://localhost:8000
+在 `deploy/.env` 中设置自选密码（文件已被 Git 忽略，不要提交凭据）：
+
+```dotenv
+POSTGRES_PASSWORD=<set-a-local-password>
 ```
 
-## 启动方式
+在项目根目录启动数据库：
 
-启动 Neo4j：
-
-```bash
-docker compose -f deploy/docker-compose.neo4j.yml up -d
+```powershell
+docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d
 ```
 
-启动后端：
+数据库只监听 `127.0.0.1:5432`，默认数据库与用户名均为 `familytree`。复制 `after/.env.example` 为 `after/.env`，将 `POSTGRES_PASSWORD` 改为同一密码，并设置本地账号密码。连接参数分项配置，密码无需自行做 URL 转义。
 
-```bash
+启动后端前，必须激活项目专用 Conda 环境 `familytree`；不存在该环境时先创建，禁止在默认环境执行项目 Python 命令：
+
+```powershell
+conda create -n familytree python=3.11
 conda activate familytree
 cd after
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-启动前端：
+已有环境可跳过 `conda create`。另开终端启动前端：
 
-```bash
+```powershell
 cd front
-npm install
+npm ci
 npm run dev
 ```
 
-## 初始化与迁移
+打开 [本地前端](http://localhost:3000) 或 [API 文档](http://localhost:8000/docs)。完整 Docker 部署、备份与旧数据处理见 [部署指南](deploy/README.md)。
 
-初始化 Neo4j 约束：
+## 初始化与旧数据
 
-```text
-POST /api/admin/init-neo4j
-```
+新建空库时可初始化本地演示账号与族谱，需先设置 `FAMILYTREE_ADMIN_PASSWORD`、`FAMILYTREE_TEST_PASSWORD`：
 
-迁移旧 SQLAlchemy 人物数据到 Neo4j：
-
-```text
-POST /api/admin/migrate-legacy
-```
-
-初始化本地演示数据：
-
-```bash
+```powershell
 conda activate familytree
 cd after
 python -m app.init_system
 ```
 
-账号信息应在本地环境中生成和保存，不应提交到公开仓库。
+已有真实数据时先做迁移与核对，再决定是否添加演示数据。原 `after/family_tree.db`、Neo4j 数据卷和 `after/uploads/` 都应保留；切换配置不会自动导入旧数据，也不要使用 `docker compose down -v` 清理历史数据。Neo4j 专用 Compose 仅供启动原实例作为迁移源，应用运行不再依赖 Neo4j。
+
+从项目根目录打开终端，迁移 SQLite 账号和旧 Neo4j 图数据：
+
+```powershell
+conda activate familytree
+cd after
+pip install -r requirements-migration.txt
+python -m app.migrate_postgres --sqlite-path ./family_tree.db --neo4j-uri bolt://127.0.0.1:7687
+```
+
+目标库读取 `after/.env` 的 PostgreSQL 配置，必须为空库。Neo4j 密码通过 `NEO4J_PASSWORD` 环境变量或 `--source-env <旧配置文件>` 提供，不写入命令行。只开放 HTTP 端口的旧实例可使用 `--neo4j-uri http://127.0.0.1:7474`，无需安装迁移专用 Driver。导出快照默认保存在未跟踪的 `.runtime/postgres-migration/snapshot.json`；使用 `--export-only` 仅备份，使用 `--from-snapshot <快照路径>` 离线导入。迁移拒绝覆盖已有目标记录，原文件和数据卷不会被删除。
 
 ## 主要 API
+
+迁移后人物 ID 统一为稳定字符串，新图谱 API 路径保持不变。旧 `/api/genealogy` 接口也读取同一人物表；旧人物接口的 `father_id`、`mother_id` 仅允许原值回传，关系变更会返回 409 并指向 `/api/relationships`，避免旧单值字段覆盖多组生养关系。数据库初始化入口改为 `POST /api/admin/init-database`。
 
 - `GET /api/graph/focus/{personId}`：中心人物本家主线图。
 - `GET /api/graph/branch/{familyUnitId}`：后代分支图。
 - `GET /api/graph/relation-path?from={id}&to={id}`：两人关系路径。
-- `GET /api/persons`：Neo4j 人物列表。
+- `GET /api/persons`：人物列表。
 - `POST /api/persons`：创建人物。
 - `POST /api/family-units`：创建家庭单元。
 - `POST /api/relationships`：创建伴侣、子女、亲子或配偶关系。
@@ -121,15 +121,15 @@ python -m app.init_system
 
 前端测试与构建：
 
-```bash
+```powershell
 cd front
 npm run test
 npm run build
 ```
 
-后端测试：
+后端测试前先激活项目环境，并按测试文档配置独立测试数据库，避免将测试指向真实族谱库：
 
-```bash
+```powershell
 conda activate familytree
 cd after
 pytest

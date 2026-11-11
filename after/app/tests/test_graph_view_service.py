@@ -16,16 +16,10 @@ class FakeNode(UserDict):
         self.labels = set(labels)
 
 
-class FakeRelationship(UserDict):
-    """模拟 Neo4j Relationship。"""
-
-    def __init__(self, rel_type, start_node, end_node, data=None):
-        """保存关系端点、类型和属性。"""
-        super().__init__(data or {})
-        self.type = rel_type
-        self.start_node = start_node
-        self.end_node = end_node
-        self.element_id = f"{rel_type}-1"
+def FakeRelationship(rel_type, start_node, end_node, data=None):
+    """构造仓库契约规定的普通边记录。"""
+    return {"source": dict(start_node), "target": dict(end_node),
+            "relationship": {"id": f"{rel_type}-1", "type": rel_type, **(data or {})}}
 
 
 class FakeRepository:

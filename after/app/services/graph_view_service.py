@@ -1,6 +1,6 @@
 """
 族谱视图组装服务
-把 Neo4j 原始记录转换为前端稳定的 GraphViewDTO。
+把 PostgreSQL 原始记录转换为前端稳定的 GraphViewDTO。
 """
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ class GraphViewService:
         view_mode: str,
         center_person_id: str | None = None,
     ) -> GraphViewResponse:
-        """把 Neo4j 原始图记录转换为前端图谱响应。"""
+        """把 PostgreSQL 原始图记录转换为前端图谱响应。"""
         persons = _dedupe_nodes([
             _to_person_node(person) for person in raw_graph.get("persons", []) if person
         ])
@@ -241,7 +241,7 @@ def _optional_str(value) -> str | None:
 
 
 def _to_person_node(node) -> GraphPerson:
-    """把 Neo4j Person 节点转换为前端人物节点。"""
+    """把 PostgreSQL Person 节点转换为前端人物节点。"""
     data = dict(node)
     person_id = str(data.get("personId") or data.get("id"))
     return GraphPerson(
@@ -274,7 +274,7 @@ def _dedupe_nodes(nodes: list[GraphPerson | GraphFamilyUnit]) -> list[GraphPerso
 
 
 def _to_family_unit_node(node) -> GraphFamilyUnit:
-    """把 Neo4j FamilyUnit 节点转换为前端家庭单元节点。"""
+    """把 PostgreSQL FamilyUnit 节点转换为前端家庭单元节点。"""
     data = dict(node)
     unit_id = str(data.get("familyUnitId") or data.get("id"))
     family_type = data.get("type") or data.get("family_type") or "marriage"
@@ -302,17 +302,12 @@ def _to_branch_capsule(data: dict[str, Any]) -> GraphBranchCapsule:
 
 
 def _to_graph_edge(edge_record) -> GraphEdge | None:
-    """把 Neo4j Relationship 转换为前端连线。"""
-    relationship = edge_record.get("relationship") if isinstance(edge_record, dict) else edge_record
-    if relationship is None:
-        return None
-
-    relation_type = relationship.type
-    properties = dict(relationship)
-    source_node = edge_record.get("source") if isinstance(edge_record, dict) else relationship.start_node
-    target_node = edge_record.get("target") if isinstance(edge_record, dict) else relationship.end_node
-    source_id = _endpoint_id(source_node)
-    target_id = _endpoint_id(target_node)
+    """把关系仓库的明确边记录转换为前端连线。"""
+    relationship = edge_record["relationship"]
+    relation_type = relationship["type"]
+    properties = {key: value for key, value in relationship.items() if key not in {"id", "type"}}
+    source_id = _endpoint_id(edge_record["source"])
+    target_id = _endpoint_id(edge_record["target"])
 
     if relation_type == "PARTNER_IN":
         relation = "partner"
@@ -336,7 +331,7 @@ def _to_graph_edge(edge_record) -> GraphEdge | None:
         style = "solid"
 
     return GraphEdge(
-        id=f"{source_id}->{target_id}:{relation_type}:{relationship.element_id}",
+        id=relationship["id"],
         source=source_id,
         target=target_id,
         relation=str(relation),
@@ -347,14 +342,10 @@ def _to_graph_edge(edge_record) -> GraphEdge | None:
 
 
 def _endpoint_id(node) -> str:
-    """根据节点标签生成前端节点 ID。"""
-    if node is None:
-        return ""
-    data = dict(node)
-    labels = set(getattr(node, "labels", []))
-    if "FamilyUnit" in labels:
-        return f"family:{data.get('familyUnitId') or data.get('id')}"
-    return str(data.get("personId") or data.get("id"))
+    """根据仓库人物或家庭单元的确定字段生成节点 ID。"""
+    if "familyUnitId" in node:
+        return f"family:{node['familyUnitId']}"
+    return node["personId"]
 
 
 def _pick_date(data: dict[str, Any], camel_key: str, snake_key: str) -> str | None:

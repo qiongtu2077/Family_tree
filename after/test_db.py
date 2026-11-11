@@ -1,38 +1,19 @@
-"""测试数据库连接"""
-import os
+"""检查当前 PostgreSQL 连接、数据表和记录数量。"""
+from sqlalchemy import func, inspect, select, text
 
-import pymysql
+from app.database import SessionLocal, engine
+from app.graph_models import GenealogyPerson
+from app.models import User
 
-try:
-    conn = pymysql.connect(
-        host=os.getenv("MYSQL_HOST", "localhost"),
-        user=os.getenv("MYSQL_USER", "root"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=os.getenv("MYSQL_DATABASE", "familytree"),
-        charset="utf8mb4",
-    )
-    print("✅ 数据库连接成功！")
-    
-    cur = conn.cursor()
-    cur.execute('SHOW TABLES')
-    tables = cur.fetchall()
-    print(f"数据库中的表: {tables}")
-    
-    # 检查 users 表
-    cur.execute('SELECT COUNT(*) FROM users')
-    user_count = cur.fetchone()[0]
-    print(f"用户数量: {user_count}")
-    
-    if user_count > 0:
-        cur.execute('SELECT id, username, is_admin FROM users')
-        users = cur.fetchall()
-        print("用户列表:")
-        for u in users:
-            print(f"  - ID:{u[0]}, 用户名:{u[1]}, 管理员:{u[2]}")
-    else:
-        print("⚠️ 没有用户，需要初始化管理员账号")
-        print("请访问: POST http://localhost:8000/api/auth/init-admin")
-    
-    conn.close()
-except Exception as e:
-    print(f"❌ 连接失败: {e}")
+
+def main():
+    """读取数据库状态，不输出连接凭据或修改数据。"""
+    with SessionLocal() as session:
+        print(session.scalar(text("SELECT version()")))
+        print({"tables": inspect(engine).get_table_names(),
+               "people": session.scalar(select(func.count()).select_from(GenealogyPerson)),
+               "users": session.scalar(select(func.count()).select_from(User))})
+
+
+if __name__ == "__main__":
+    main()

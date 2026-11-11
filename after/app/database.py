@@ -1,52 +1,47 @@
-"""
-数据库连接配置
-使用 SQLAlchemy 连接 MySQL 数据库
-"""
+"""PostgreSQL 连接与请求事务管理。"""
+from collections.abc import Generator
+
+from fastapi import HTTPException
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-import os
-from dotenv import load_dotenv
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-# 加载环境变量
-load_dotenv()
+from .config import get_settings
 
-# 数据库连接配置
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite:///./family_tree.db"
-)
 
-# 创建数据库引擎
-engine_options = {
-    "echo": False,
-}
-if DATABASE_URL.startswith("sqlite"):
-    engine_options["connect_args"] = {"check_same_thread": False}
-else:
-    engine_options.update({
-        "pool_pre_ping": True,
-        "pool_recycle": 3600,
-    })
+def build_database_url() -> URL:
+    """构造 PostgreSQL URL，分项密码交给驱动编码。"""
+    settings = get_settings()
+    if settings.database_url:
+        url = make_url(settings.database_url)
+        if url.get_backend_name() != "postgresql":
+            raise ValueError("DATABASE_URL 必须使用 PostgreSQL；旧 SQLite 文件请通过迁移工具读取")
+        return url.set(drivername="postgresql+psycopg")
+    if not settings.postgres_password:
+        raise ValueError("缺少 POSTGRES_PASSWORD，请在 after/.env 中配置 PostgreSQL 连接")
+    return URL.create("postgresql+psycopg", username=settings.postgres_user,
+                      password=settings.postgres_password, host=settings.postgres_host,
+                      port=settings.postgres_port, database=settings.postgres_db)
 
-engine = create_engine(DATABASE_URL, **engine_options)
 
-# 创建会话工厂
+engine = create_engine(build_database_url(), pool_pre_ping=True, pool_recycle=3600)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 声明基类
 Base = declarative_base()
 
 
-def get_db():
-    """
-    获取数据库会话
-    用于依赖注入，FastAPI 会自动管理会话的生命周期
-    """
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
+def get_db() -> Generator:
+    """每个请求共享一次事务，成功提交，失败回滚。"""
+    with SessionLocal() as db:
+        try:
+            yield db
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="数据违反唯一性或关系约束") from exc
+        except OperationalError as exc:
+            db.rollback()
+            raise HTTPException(status_code=503, detail="PostgreSQL 服务不可用") from exc
+        except Exception:
+            db.rollback()
+            raise

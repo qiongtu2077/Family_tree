@@ -1,19 +1,19 @@
 """
-Neo4j 族谱关系 API
+PostgreSQL 族谱关系 API
 负责创建伴侣、子女、亲子和配偶关系。
 """
 from fastapi import APIRouter, Depends
 
 from ..graph_schemas import RelationshipCreate
-from ..neo4j import get_neo4j_session
+from ..database import get_db
 from ..repositories.person_repository import PersonRepository
 from ..services.relationship_validation_service import RelationshipValidationService
 
-router = APIRouter(prefix="/api/relationships", tags=["Neo4j 关系"])
+router = APIRouter(prefix="/api/relationships", tags=["PostgreSQL 关系"])
 
 
 @router.post("", status_code=201)
-def create_relationship(payload: RelationshipCreate, session=Depends(get_neo4j_session)):
+def create_relationship(payload: RelationshipCreate, session=Depends(get_db)):
     """创建族谱关系。"""
     repository = PersonRepository(session)
     RelationshipValidationService(repository).validate_create(payload)

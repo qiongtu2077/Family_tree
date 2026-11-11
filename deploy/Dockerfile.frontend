@@ -1,24 +1,24 @@
 # 前端 Dockerfile
-FROM node:18-alpine as builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
 # 安装依赖
-COPY package*.json ./
-RUN npm install --registry=https://registry.npmmirror.com
+COPY front/package*.json ./
+RUN npm ci
 
 # 复制代码并构建
-COPY . .
+COPY front/ .
 RUN npm run build
 
 # 生产环境
-FROM nginx:alpine
+FROM nginx:1.30-alpine
 
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # 复制 nginx 配置
-COPY ../deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 

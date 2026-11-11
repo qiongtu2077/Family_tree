@@ -1,20 +1,24 @@
-version: '3.8'
+name: familytree
 
 services:
-  neo4j:
-    image: neo4j:5.26-community
-    container_name: family_tree_neo4j
+  postgres:
+    image: postgres:18
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:5432:5432"
     environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in your shell or .env}
+      POSTGRES_DB: familytree
+      POSTGRES_USER: familytree
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your shell or deploy/.env}
     volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-      - neo4j_import:/var/lib/neo4j/import
-      - neo4j_plugins:/plugins
-    restart: always
+      # PostgreSQL 18 的 PGDATA 位于版本子目录，需挂载父目录。
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
 
   # 后端服务
   backend:
@@ -22,34 +26,39 @@ services:
       context: ../after
       dockerfile: ../deploy/Dockerfile.backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      - DATABASE_URL=sqlite:///./family_tree.db
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?set NEO4J_PASSWORD in your shell or .env}
-      - NEO4J_DATABASE=neo4j
-      - SERVER_URL=http://your-domain.com:8000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: familytree
+      POSTGRES_USER: familytree
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your shell or deploy/.env}
+      FAMILYTREE_ADMIN_PASSWORD: ${FAMILYTREE_ADMIN_PASSWORD:?set FAMILYTREE_ADMIN_PASSWORD in deploy/.env}
+      FAMILYTREE_TEST_PASSWORD: ${FAMILYTREE_TEST_PASSWORD:-}
+      SERVER_URL: ${SERVER_URL:-http://localhost:8080}
+      SMTP_SERVER: ${SMTP_SERVER:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SENDER_EMAIL: ${SMTP_SENDER_EMAIL:-}
+      SMTP_SENDER_PASSWORD: ${SMTP_SENDER_PASSWORD:-}
+      SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-}
     volumes:
-      - ../after/family_tree.db:/app/family_tree.db
+      - ../after/uploads:/app/uploads
     depends_on:
-      - neo4j
-    restart: always
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   # 前端服务
   frontend:
     build:
-      context: ../front
-      dockerfile: ../deploy/Dockerfile.frontend
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
     ports:
-      - "80:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       - backend
-    restart: always
+    restart: unless-stopped
 
 volumes:
-  neo4j_data:
-  neo4j_logs:
-  neo4j_import:
-  neo4j_plugins:
+  postgres_data:
 

@@ -24,6 +24,9 @@
           :key="option.id"
           class="option-card"
           :class="{ selected: option.id === selectedId }"
+          data-testid="graph-option-card"
+          :data-option-id="option.id"
+          :data-option-mode="mode"
           @click="$emit('select', option.raw)"
         >
           <span class="avatar">{{ option.name.slice(0, 1) }}</span>

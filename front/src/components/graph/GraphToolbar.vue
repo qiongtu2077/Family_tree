@@ -81,7 +81,7 @@ const views = [
 <style scoped>
 .graph-toolbar {
   display: grid;
-  grid-template-columns: auto minmax(260px, 420px) 1fr auto;
+  grid-template-columns: auto minmax(240px, 360px) minmax(280px, 1fr) auto;
   align-items: center;
   gap: 18px;
   padding: 10px 20px;
@@ -115,6 +115,7 @@ p {
 .search-area {
   display: flex;
   gap: 8px;
+  min-width: 0;
 }
 
 .search-area input {
@@ -137,9 +138,10 @@ p {
 
 .view-tabs {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
-  overflow-x: auto;
 }
 
 .view-tabs button,
@@ -163,7 +165,10 @@ p {
 
 .toolbar-actions {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   gap: 8px;
+  justify-content: flex-end;
 }
 
 .toolbar-actions .ghost-btn {
@@ -196,6 +201,18 @@ p {
 
   .view-tabs,
   .toolbar-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 1380px) {
+  .graph-toolbar {
+    grid-template-columns: auto minmax(240px, 1fr);
+  }
+
+  .view-tabs,
+  .toolbar-actions {
+    grid-column: 1 / -1;
     justify-content: flex-start;
   }
 }

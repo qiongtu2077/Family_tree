@@ -43,7 +43,7 @@ class UserResponse(BaseModel):
     email: str
     real_name: Optional[str] = None
     is_admin: bool
-    person_id: Optional[int] = None
+    person_id: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -194,10 +194,12 @@ def approve_registration(token: str, db: Session = Depends(get_db)):
         """)
     
     # 尝试根据真实姓名匹配族谱人员
-    from ..models import Person
+    from ..graph_models import GenealogyPerson
     matched_person = None
     if reg_request.real_name:
-        matched_person = db.query(Person).filter(Person.name == reg_request.real_name).first()
+        matches = db.query(GenealogyPerson).filter(GenealogyPerson.name == reg_request.real_name).limit(2).all()
+        # 同名不能证明是同一个人；只有唯一匹配时才自动绑定。
+        matched_person = matches[0] if len(matches) == 1 else None
     
     # 创建用户
     new_user = User(
@@ -205,7 +207,7 @@ def approve_registration(token: str, db: Session = Depends(get_db)):
         password=reg_request.password,
         email=reg_request.email,
         real_name=reg_request.real_name,
-        person_id=matched_person.id if matched_person else None,
+        person_id=matched_person.person_id if matched_person else None,
         is_admin=False,
         is_active=True
     )

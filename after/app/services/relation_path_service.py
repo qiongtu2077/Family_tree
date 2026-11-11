@@ -61,33 +61,26 @@ def _to_path_person(node) -> GraphPerson:
 
 
 def _to_path_edge(relationship) -> GraphEdge:
-    """把路径关系转换为高亮连线。"""
-    source = _person_endpoint_id(relationship.start_node)
-    target = _person_endpoint_id(relationship.end_node)
+    """把关系仓库路径字典转换为高亮连线，保留真实亲子方向。"""
+    relation_type = relationship["type"]
     return GraphEdge(
-        id=f"path:{relationship.element_id}",
-        source=source,
-        target=target,
-        relation=_normalize_relation_type(relationship.type),
-        label=_path_label(relationship.type),
+        id=f"path:{relationship['id']}",
+        source=relationship["source"],
+        target=relationship["target"],
+        relation=_normalize_relation_type(relation_type),
+        label=_path_label(relation_type),
         style="highlight",
-        metadata=dict(relationship),
+        metadata={key: value for key, value in relationship.items() if key not in {"id", "type", "source", "target"}},
     )
 
 
 def _normalize_relation_type(relation_type: str) -> str:
-    """把 Neo4j 关系类型转换为前端稳定关系名。"""
+    """把 PostgreSQL 关系类型转换为前端稳定关系名。"""
     mappings = {
         "PARENT_OF": "parent_of",
         "SPOUSE_OF": "spouse_of",
     }
     return mappings.get(relation_type, relation_type.lower())
-
-
-def _person_endpoint_id(node) -> str:
-    """获取路径人物端点 ID。"""
-    data = dict(node)
-    return str(data.get("personId") or data.get("id"))
 
 
 def _path_label(relation_type: str) -> str:

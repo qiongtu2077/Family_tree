@@ -15,16 +15,10 @@ class FakeNode(UserDict):
         super().__init__(data)
 
 
-class FakeRelationship(UserDict):
-    """模拟 Neo4j Relationship。"""
-
-    def __init__(self, start_node, end_node):
-        """保存亲子关系端点。"""
-        super().__init__({})
-        self.type = "PARENT_OF"
-        self.start_node = start_node
-        self.end_node = end_node
-        self.element_id = "parent-1"
+def FakeRelationship(start_node, end_node):
+    """构造保留真实亲子方向的普通路径关系。"""
+    return {"id": "parent-1", "type": "PARENT_OF", "source": start_node["personId"],
+            "target": end_node["personId"]}
 
 
 class FakeRepository:
