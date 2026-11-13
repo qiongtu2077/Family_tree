@@ -11,6 +11,8 @@ from urllib.parse import quote
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from .person_repository import PersonRepository
+
 from ..graph_models import (
     FamilyChild,
     FamilyPartner,
@@ -687,17 +689,8 @@ class GraphRepository:
     # --- 人物检索与关系路径 --- #
 
     def get_center_candidates(self, keyword: str, limit: int) -> list[dict[str, Any]]:
-        """按姓名搜索中心人物，限制候选数量。"""
-        keyword = (keyword or "").strip()
-        if not keyword:
-            return []
-        statement = (
-            select(GenealogyPerson)
-            .where(func.lower(GenealogyPerson.name).contains(keyword.lower(), autoescape=True))
-            .order_by(GenealogyPerson.name, GenealogyPerson.person_id)
-            .limit(min(max(int(limit), 1), 50))
-        )
-        return [person.to_dict() for person in self.session.scalars(statement)]
+        """复用人物姓名/全拼/首拼检索，中心候选仍限制在1至50条。"""
+        return PersonRepository(self.session).search_persons(keyword, min(max(int(limit), 1), 50))
 
     def get_relation_path(self, from_person_id: str, to_person_id: str) -> dict[str, Any] | None:
         """通过逐层邻接查询读取十条关系以内的最短亲缘路径。"""

@@ -17,7 +17,7 @@
         <div v-else class="management-body" :class="{ 'relation-body': tab === 'relationships', 'is-loading': loading }" :aria-busy="loading">
           <template v-if="tab !== 'relationships'">
             <aside class="record-sidebar">
-              <div class="record-search"><input v-model="keyword" type="search" :placeholder="tab === 'people' ? '搜索姓名、生年、职业' : '搜索家庭成员姓名'" :aria-label="tab === 'people' ? '搜索人物资料' : '搜索家庭资料'" /></div>
+              <div class="record-search"><input v-model="keyword" type="search" :placeholder="tab === 'people' ? '姓名、拼音、首拼、生年或职业' : '成员姓名、拼音或首拼'" :aria-label="tab === 'people' ? '搜索人物资料' : '搜索家庭资料'" /></div>
               <button type="button" class="add-record" :disabled="busy || loading" @click="newRecord">+ {{ tab === 'people' ? '添加人物' : '建立家庭' }}</button>
               <div class="record-list" :aria-label="tab === 'people' ? '人物列表' : '家庭列表'">
                 <template v-if="tab === 'people'">
@@ -61,6 +61,7 @@ import FamilyEditor from './management/FamilyEditor.vue'
 import RelationshipManager from './management/RelationshipManager.vue'
 import { deletePerson } from '../../api/persons'
 import { deleteManagementFamily, getManagementFamilies, getManagementPeople, getManagementRelationships, managementErrorMessage } from '../../api/management'
+import { matchesPersonSearch, normalizePersonSearch } from '../../utils/personSearch'
 
 const props = defineProps({ open: { type: Boolean, default: false }, people: { type: Array, default: () => [] } })
 const emit = defineEmits(['close', 'changed'])
@@ -85,15 +86,15 @@ const deleteTarget = ref(null)
 const deleteError = ref('')
 const selectedPerson = computed(() => personRecords.value.find(person => person.id === selectedPersonId.value))
 const selectedFamily = computed(() => familyRecords.value.find(family => family.id === selectedFamilyId.value))
-const namesById = computed(() => new Map(personRecords.value.map(person => [person.id, person.name])))
+const peopleById = computed(() => new Map(personRecords.value.map(person => [person.id, person])))
 const directRelationCount = computed(() => relationshipRecords.value.filter(relation => ['parent_child', 'spouse'].includes(relation.relationship_type)).length)
 const filteredPeople = computed(() => {
-  const query = keyword.value.trim().toLocaleLowerCase()
-  return personRecords.value.filter(person => !query || [person.name, person.birth_date, person.occupation].some(value => value?.toLocaleLowerCase().includes(query)))
+  const query = normalizePersonSearch(keyword.value)
+  return personRecords.value.filter(person => matchesPersonSearch(person, query) || [person.birth_date, person.occupation].some(value => normalizePersonSearch(value || '').includes(query)))
 })
 const filteredFamilies = computed(() => {
-  const query = keyword.value.trim().toLocaleLowerCase()
-  return familyRecords.value.filter(family => !query || [...family.partners, ...family.children].some(member => personName(member.person_id).toLocaleLowerCase().includes(query)) || familyTypeNames[family.family_type].includes(query))
+  const query = normalizePersonSearch(keyword.value)
+  return familyRecords.value.filter(family => !query || [...family.partners, ...family.children].some(member => matchesPersonSearch(peopleById.value.get(member.person_id), query)) || normalizePersonSearch(familyTypeNames[family.family_type]).includes(query))
 })
 
 // --- 完整资料读取与视图选择 --- //
@@ -120,7 +121,7 @@ async function loadData() {
 
 /** 从完整人物表解析姓名，成员缺失时保留稳定 ID 便于排查。 */
 function personName(personId) {
-  return namesById.value.get(personId) || personId
+  return peopleById.value.get(personId)?.name || personId
 }
 
 /** 用父母或伴侣姓名为家庭提供可辨认的名称，空家庭显示短 ID。 */

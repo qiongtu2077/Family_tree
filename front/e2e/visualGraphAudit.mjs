@@ -3,6 +3,7 @@ import { chromium, request } from 'playwright'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 
 const FRONT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -52,6 +53,7 @@ async function main() {
     await page.goto(FRONTEND_URL, { waitUntil: 'domcontentloaded' })
     await loginThroughPage(page)
     await selectCenterPerson(page)
+    await auditNameSearch(page)
     // 刷新后必须凭服务端 Cookie 恢复会话。
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.getByRole('heading', { name: '家族谱系', exact: true }).waitFor()
@@ -134,8 +136,74 @@ async function resolveCenterPerson() {
 
 // --- 五图、参数与真实折叠入口 --- //
 
+/** 在现有数据上只读检查顶部、中心、管理、成员选择和路径筛选的首拼入口。 */
+async function auditNameSearch(page) {
+  const initials = centerPerson.name_initials
+  assert(initials, '人物响应缺少首拼检索键')
+  const query = initials.toUpperCase().split('').join(' ')
+  for (const [id, keyword] of [['initials', query], ['full-pinyin', centerPerson.name_pinyin]]) {
+    await page.getByRole('searchbox', { name: '搜索人物姓名', exact: true }).fill(keyword)
+    const response = page.waitForResponse(result => new URL(result.url()).pathname === '/api/persons/search')
+    await page.getByRole('search', { exact: true }).getByRole('button', { name: '搜索', exact: true }).click()
+    assert((await (await response).json()).some(person => person.id === centerPerson.id), '顶部搜索未返回目标人物')
+    await page.locator('.search-results').getByRole('button').filter({ hasText: centerPerson.name }).first().waitFor()
+    auditCases.push({ id: `search-top-${id}`, status: 'passed' })
+  }
+  await takeScreenshot(page, 'search-top-initials')
+  await page.getByRole('button', { name: '收起搜索结果', exact: true }).click()
+
+  await page.locator('.center-btn').click()
+  const centerModal = page.getByRole('dialog', { name: '选择中心人物', exact: true })
+  await centerModal.getByPlaceholder('输入姓名搜索中心人物').fill(query)
+  const candidates = page.waitForResponse(result => new URL(result.url()).pathname === '/api/graph/center-candidates')
+  await centerModal.getByRole('button', { name: '搜索', exact: true }).click()
+  assert((await (await candidates).json()).some(person => person.id === centerPerson.id), '中心候选未返回首拼匹配人物')
+  await centerModal.locator(optionSelector(centerPerson.id)).waitFor()
+  auditCases.push({ id: 'search-center-initials', status: 'passed' })
+  await centerModal.getByRole('button', { name: '取消', exact: true }).click()
+
+  await page.getByRole('button', { name: '关系路径', exact: true }).click()
+  const pathPanel = page.getByRole('dialog', { name: '关系路径', exact: true })
+  await pathPanel.getByRole('searchbox', { name: '搜索人物 A', exact: true }).fill(query)
+  await pathPanel.locator('#relation-from').selectOption(centerPerson.id)
+  const spouse = centerContext.available_spouses[0]?.person
+  assert(spouse, '路径首拼验收需要具有配偶的中心人物')
+  await pathPanel.getByRole('searchbox', { name: '搜索人物 B', exact: true }).fill(spouse.name_initials.toUpperCase())
+  await pathPanel.locator('#relation-to').selectOption(spouse.id)
+  await pathPanel.getByRole('searchbox', { name: '搜索人物 A', exact: true }).fill('no-such-person')
+  assert.equal(await pathPanel.locator('#relation-from').inputValue(), centerPerson.id, '筛选不应改写已选人物')
+  await pathPanel.getByRole('searchbox', { name: '搜索人物 A', exact: true }).fill('')
+  await pathPanel.getByRole('searchbox', { name: '搜索人物 B', exact: true }).fill('')
+  auditCases.push({ id: 'search-path-both-people', status: 'passed' })
+  await pathPanel.getByRole('button', { name: '关闭' }).click()
+
+  await page.getByRole('button', { name: '资料管理', exact: true }).click()
+  const manager = page.getByRole('dialog', { name: '家族资料管理', exact: true })
+  await page.waitForFunction(() => document.querySelector('.management-body')?.getAttribute('aria-busy') === 'false')
+  await manager.getByRole('searchbox', { name: '搜索人物资料', exact: true }).fill(query)
+  await manager.locator('.record-list').getByRole('button').filter({ hasText: centerPerson.name }).first().waitFor()
+  auditCases.push({ id: 'search-management-people', status: 'passed' })
+  await manager.getByRole('button', { name: /^家庭资料/ }).click()
+  await manager.getByRole('searchbox', { name: '搜索家庭资料', exact: true }).fill(query)
+  await manager.locator('.record-list').getByRole('button').filter({ hasText: centerPerson.name }).first().waitFor()
+  auditCases.push({ id: 'search-management-families', status: 'passed' })
+  await manager.getByRole('button', { name: /^亲缘关系/ }).click()
+  await manager.getByRole('searchbox', { name: '搜索关系人物', exact: true }).fill(query)
+  await manager.locator('.relation-row').filter({ hasText: centerPerson.name }).first().waitFor()
+  auditCases.push({ id: 'search-management-relationships', status: 'passed' })
+  await manager.getByRole('button', { name: '+ 录入关系', exact: true }).click()
+  await manager.locator('#relationship-from').fill(query)
+  await manager.getByRole('option').filter({ hasText: centerPerson.name }).first().waitFor()
+  auditCases.push({ id: 'search-remote-person-lookup', status: 'passed' })
+  await takeScreenshot(page, 'search-management-initials')
+  await manager.getByRole('button', { name: '取消', exact: true }).click()
+  await manager.getByRole('button', { name: '关闭资料管理', exact: true }).click()
+}
+
 /** 选择 API 已确认的中心人物，使用稳定 ID 避免同名人物误选。 */
 async function selectCenterPerson(page) {
+  // 首次登录须等自动中心选择或初始画布出现，避免点到异步弹出的遮罩后方。
+  await page.waitForFunction(() => document.querySelector('[role="dialog"][aria-label="选择中心人物"]') || document.querySelector('.graph-canvas canvas'))
   const modal = page.getByRole('dialog', { name: '选择中心人物', exact: true })
   if (!(await modal.isVisible())) await page.locator('.center-btn').click()
   await modal.getByPlaceholder('输入姓名搜索中心人物').fill(centerPerson.name)

@@ -18,7 +18,7 @@
       <div class="form-actions"><button type="button" class="secondary" :disabled="busy" @click="adding = false">取消</button><button class="primary" :disabled="busy || !form.person_id || !form.target_person_id">{{ busy ? '保存中…' : '保存关系' }}</button></div>
     </form>
 
-    <div class="relation-tools"><input v-model="keyword" type="search" placeholder="搜索人物姓名" aria-label="搜索关系人物" /><select v-model="filter" aria-label="筛选关系类型"><option value="all">全部关系</option><option value="parent_child">亲子关系</option><option value="spouse">配偶关系</option></select><span>{{ filteredRelations.length }} 条</span></div>
+    <div class="relation-tools"><input v-model="keyword" type="search" placeholder="姓名、拼音或首拼" aria-label="搜索关系人物" /><select v-model="filter" aria-label="筛选关系类型"><option value="all">全部关系</option><option value="parent_child">亲子关系</option><option value="spouse">配偶关系</option></select><span>{{ filteredRelations.length }} 条</span></div>
     <div v-if="!filteredRelations.length" class="empty-list">{{ keyword ? '没有匹配的关系。' : '尚无亲子或配偶关系。可先建立家庭，或录入独立亲缘事实。' }}</div>
     <div v-for="relation in filteredRelations" :key="relation.id" class="relation-row">
       <div class="relation-people"><strong>{{ personName(relation.person_id) }}</strong><span class="relation-tag">{{ relation.relationship_type === 'spouse' ? '配偶' : `${sideNames[relation.side || 'parent']} → ${relationKindNames[relation.relation_kind]}` }}</span><strong>{{ personName(relation.target_person_id) }}</strong></div>
@@ -44,6 +44,7 @@ import { computed, reactive, ref } from 'vue'
 import PersonLookup from './PersonLookup.vue'
 import { createRelationship } from '../../../api/relationships'
 import { deleteManagementRelationship, managementErrorMessage } from '../../../api/management'
+import { matchesPersonSearch, normalizePersonSearch } from '../../../utils/personSearch'
 
 const props = defineProps({ people: { type: Array, default: () => [] }, relationships: { type: Array, default: () => [] } })
 const emit = defineEmits(['saved', 'busy', 'select-family'])
@@ -57,19 +58,21 @@ const busy = ref(false)
 const error = ref('')
 const removeTarget = ref(null)
 const form = reactive({})
-const namesById = computed(() => new Map(props.people.map(person => [person.id, person.name])))
-const filteredRelations = computed(() => props.relationships.filter(relation => {
-  if (!['parent_child', 'spouse'].includes(relation.relationship_type)) return false
-  if (filter.value !== 'all' && relation.relationship_type !== filter.value) return false
-  const query = keyword.value.trim().toLocaleLowerCase()
-  return !query || [personName(relation.person_id), personName(relation.target_person_id)].some(name => name.toLocaleLowerCase().includes(query))
-}))
+const peopleById = computed(() => new Map(props.people.map(person => [person.id, person])))
+const filteredRelations = computed(() => {
+  const query = normalizePersonSearch(keyword.value)
+  return props.relationships.filter(relation => {
+    if (!['parent_child', 'spouse'].includes(relation.relationship_type)) return false
+    if (filter.value !== 'all' && relation.relationship_type !== filter.value) return false
+    return !query || [relation.person_id, relation.target_person_id].some(id => matchesPersonSearch(peopleById.value.get(id), query))
+  })
+})
 
 // --- 清单显示与关系表单 --- //
 
 /** 从完整人物清单解析端点姓名。 */
 function personName(personId) {
-  return namesById.value.get(personId) || personId
+  return peopleById.value.get(personId)?.name || personId
 }
 
 /** 初始化独立关系表单，已有关系保持稳定端点与亲缘类型。 */

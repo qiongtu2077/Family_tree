@@ -6,7 +6,7 @@ from itertools import combinations
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from ..database import Base
@@ -14,6 +14,7 @@ from ..graph_models import (
     GRAPH_TABLES, FamilyChild, FamilyPartner, FamilyUnit, GenealogyPerson, ParentChild, Spouse,
 )
 from ..models import User
+from ..person_search import matches_person_name, normalize_search_text
 
 
 class PersonRepository:
@@ -77,12 +78,32 @@ class PersonRepository:
         ).offset(skip).limit(limit)
         return [person.to_dict() for person in self.session.scalars(query)]
 
-    def search_persons(self, keyword: str) -> list[dict[str, Any]]:
-        """按姓名执行不区分大小写的字面子串搜索。"""
-        query = select(GenealogyPerson).where(
-            func.lower(GenealogyPerson.name).contains(keyword.lower(), autoescape=True),
-        ).order_by(GenealogyPerson.name, GenealogyPerson.person_id).limit(30)
-        return [person.to_dict() for person in self.session.scalars(query)]
+    def search_persons(self, keyword: str, limit: int = 30) -> list[dict[str, Any]]:
+        """统一匹配姓名、全拼和首拼，按姓名排序并在匹配后限制结果数量。"""
+        keyword = normalize_search_text(keyword)
+        if not keyword:
+            return []
+        query = select(GenealogyPerson.person_id, GenealogyPerson.name).order_by(
+            GenealogyPerson.name, GenealogyPerson.person_id,
+        ).execution_options(yield_per=256)
+        matched_ids = []
+        # 不先截断前30人，否则排序靠后的人物永远无法被首拼找到。
+        # 仅分批扫描ID和姓名，匹配后再读取完整资料，避免全库生平/照片占用内存。
+        candidates = self.session.execute(query)
+        try:
+            for person_id, name in candidates:
+                if matches_person_name(name, keyword):
+                    matched_ids.append(person_id)
+                    if len(matched_ids) >= limit:
+                        break
+        finally:
+            candidates.close()
+        if not matched_ids:
+            return []
+        matches = select(GenealogyPerson).where(GenealogyPerson.person_id.in_(matched_ids)).order_by(
+            GenealogyPerson.name, GenealogyPerson.person_id,
+        )
+        return [person.to_dict() for person in self.session.scalars(matches)]
 
     def get_person(self, person_id: str) -> dict[str, Any] | None:
         """根据稳定 personId 读取人物属性。"""

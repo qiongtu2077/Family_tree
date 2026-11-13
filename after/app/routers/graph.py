@@ -124,7 +124,7 @@ def get_overview_graph(
 
 @router.get("/center-candidates", response_model=list[GraphPerson])
 def get_center_candidates(
-    keyword: str = Query(..., min_length=1, description="中心人物姓名关键词"),
+    keyword: str = Query(..., min_length=1, description="中心人物姓名、拼音或首拼关键词"),
     limit: int = Query(20, ge=1, le=50, description="候选数量上限"),
     session=Depends(get_db),
 ):

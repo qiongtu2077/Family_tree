@@ -12,6 +12,7 @@
           :value="keyword"
           type="search"
           placeholder="输入姓名搜索中心人物"
+          title="支持中文姓名、完整拼音或首拼，例如：张明远 / zhangmingyuan / zmy"
           @input="$emit('update:keyword', $event.target.value)"
           @keyup.enter="$emit('search')"
         />

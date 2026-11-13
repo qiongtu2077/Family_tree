@@ -93,6 +93,26 @@ def login_as(client, username="owner"):
 # --- Cookie 生命周期与身份真实性 --- #
 
 
+@pytest.mark.parametrize("endpoint,parameter", [
+    ("/api/persons/search", "name"),
+    ("/api/graph/center-candidates", "keyword"),
+    ("/api/genealogy/persons/search", "name"),
+])
+def test_authenticated_search_routes_share_initial_matching(session_api, endpoint, parameter):
+    """通过真实Cookie请求覆盖顶部、中心及旧搜索接口的首拼调用链。"""
+    client, sessions, _app, _approval_mail, _result_mail = session_api
+    with sessions() as db:
+        PersonRepository(db).update_person("p:owner", {"name": "张明远"})
+        db.commit()
+    login_as(client)
+    response = client.get(endpoint, params={parameter: " Z M Y "})
+    assert response.status_code == 200
+    assert [person["id"] for person in response.json()] == ["p:owner"]
+    if endpoint != "/api/genealogy/persons/search":
+        assert response.json()[0]["name_initials"] == "zmy"
+        assert response.json()[0]["name_pinyin"] == "zhangmingyuan"
+
+
 def test_login_cookie_hash_logout_and_replay(session_api):
     """Cookie 不含账号编号，数据库只存散列，退出后历史凭据无法重放。"""
     client, sessions, _app, _approval_mail, _result_mail = session_api

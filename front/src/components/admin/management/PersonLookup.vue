@@ -6,7 +6,7 @@
       <button type="button" :aria-label="`重新选择${label}`" :disabled="disabled" @click="clearSelection">重选</button>
     </div>
     <template v-else>
-      <input :id="inputId" v-model="keyword" type="search" placeholder="输入姓名查找人物" autocomplete="off" :disabled="disabled" @input="search" />
+      <input :id="inputId" v-model="keyword" type="search" placeholder="输入姓名、拼音或首拼" autocomplete="off" :disabled="disabled" @input="search" />
       <div v-if="keyword.trim()" class="lookup-results" role="listbox" :aria-label="`${label}搜索结果`">
         <p v-if="loading">正在查找…</p>
         <p v-else-if="error" role="alert">{{ error }}</p>

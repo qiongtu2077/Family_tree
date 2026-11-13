@@ -25,10 +25,10 @@ def list_persons(
 
 @router.get("/search", response_model=list[GraphPerson])
 def search_persons(
-    name: str = Query(..., min_length=1, description="姓名关键词"),
+    name: str = Query(..., min_length=1, description="姓名、拼音或首拼关键词"),
     session=Depends(get_db),
 ):
-    """根据姓名搜索人物。"""
+    """根据姓名、全拼或首拼搜索人物。"""
     repository = PersonRepository(session)
     return [_to_graph_person(person) for person in repository.search_persons(name.strip())]
 

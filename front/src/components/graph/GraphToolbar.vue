@@ -7,7 +7,7 @@
       </div>
       <form class="search-area" role="search" @submit.prevent="$emit('search')">
         <span aria-hidden="true" class="search-symbol">⌕</span>
-        <input :value="searchKeyword" type="search" aria-label="搜索人物姓名" placeholder="搜索人物姓名..." @input="$emit('update:searchKeyword', $event.target.value)" />
+        <input :value="searchKeyword" type="search" aria-label="搜索人物姓名" placeholder="姓名、拼音或首拼..." @input="$emit('update:searchKeyword', $event.target.value)" />
         <button class="primary-btn" type="submit">搜索</button>
       </form>
       <div class="toolbar-actions">

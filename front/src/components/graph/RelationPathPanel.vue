@@ -6,12 +6,16 @@
         <button class="close-button" @click="$emit('close')">关闭 <span aria-hidden="true">×</span></button>
       </header>
       <div class="selector-grid">
-        <label for="relation-from">人物 A
-          <select id="relation-from" v-model="fromId" :disabled="isQuerying"><option value="">请选择</option><option v-for="person in people" :key="person.id" :value="person.id">{{ person.name }}</option></select>
-        </label>
-        <label for="relation-to">人物 B
-          <select id="relation-to" v-model="toId" :disabled="isQuerying"><option value="">请选择</option><option v-for="person in people" :key="person.id" :value="person.id">{{ person.name }}</option></select>
-        </label>
+        <div class="person-selector">
+          <label for="relation-from">人物 A</label>
+          <input v-model="fromKeyword" type="search" aria-label="搜索人物 A" placeholder="姓名、拼音或首拼" :disabled="isQuerying" />
+          <select id="relation-from" v-model="fromId" :disabled="isQuerying"><option value="">请选择</option><option v-for="person in fromPeople" :key="person.id" :value="person.id">{{ person.name }}</option></select>
+        </div>
+        <div class="person-selector">
+          <label for="relation-to">人物 B</label>
+          <input v-model="toKeyword" type="search" aria-label="搜索人物 B" placeholder="姓名、拼音或首拼" :disabled="isQuerying" />
+          <select id="relation-to" v-model="toId" :disabled="isQuerying"><option value="">请选择</option><option v-for="person in toPeople" :key="person.id" :value="person.id">{{ person.name }}</option></select>
+        </div>
       </div>
       <button class="query-btn" :disabled="!canQuery || isQuerying" @click="query">{{ isQuerying ? '正在查找亲缘路径...' : '查询关系' }}</button>
       <div v-if="result" class="result-card" aria-live="polite">
@@ -34,6 +38,7 @@
 <script setup>
 /** 展示两个人的关系解释及后端返回的实际人物路径。 */
 import { computed, ref, watch } from 'vue'
+import { matchesPersonSearch } from '../../utils/personSearch'
 const props = defineProps({
   open: { type: Boolean, default: false },
   people: { type: Array, default: () => [] },
@@ -43,10 +48,15 @@ const props = defineProps({
 defineEmits(['close'])
 const fromId = ref('')
 const toId = ref('')
+const fromKeyword = ref('')
+const toKeyword = ref('')
 const result = ref(null)
 const errorMessage = ref('')
 const isQuerying = ref(false)
 const canQuery = computed(() => fromId.value && toId.value && fromId.value !== toId.value)
+// 当前选项始终保留，收窄候选范围不会悄悄改写已选人物。
+const fromPeople = computed(() => props.people.filter(person => person.id === fromId.value || matchesPersonSearch(person, fromKeyword.value)))
+const toPeople = computed(() => props.people.filter(person => person.id === toId.value || matchesPersonSearch(person, toKeyword.value)))
 
 /** 查询后端已确认的 RelationPathResponse，并控制提交状态。 */
 async function query() {
@@ -85,9 +95,10 @@ button { padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; 
 .close-button { flex-shrink: 0; padding: 4px 0 4px 10px; border: 0; color: var(--muted); font-size: 11px; }
 .close-button span { margin-left: 4px; font-size: 18px; vertical-align: -1px; }
 .selector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 24px 0 18px; }
-label { display: grid; min-width: 0; gap: 9px; color: var(--muted); font-size: 12px; }
-select { min-width: 0; max-width: 100%; padding: 11px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: #f9faf7; font-size: 13px; }
-select:focus { border-color: var(--green); }
+.person-selector { display: grid; min-width: 0; gap: 9px; }
+label { color: var(--muted); font-size: 12px; }
+input, select { width: 100%; min-width: 0; max-width: 100%; padding: 11px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: #f9faf7; font-size: 13px; }
+input:focus, select:focus { border-color: var(--green); }
 .query-btn { width: 100%; padding: 12px; color: #fff; border-color: var(--green); background: var(--green); }
 .query-btn:disabled { opacity: .45; }
 .result-card { margin-top: 23px; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: #f7faf6; }

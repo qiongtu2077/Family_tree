@@ -7,7 +7,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+
+from .person_search import name_search_keys
 
 
 Gender = Literal["M", "F", "U"]
@@ -34,6 +36,18 @@ class GraphPerson(BaseModel):
     motto: str | None = None
     achievements: str | None = None
     badges: list[str] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def name_pinyin(self) -> str:
+        """为人物列表、候选和图谱统一返回可供本地过滤的全拼。"""
+        return name_search_keys(self.name)[1]
+
+    @computed_field
+    @property
+    def name_initials(self) -> str:
+        """根据当前姓名返回首拼，不信任客户端或历史资料中的旧检索键。"""
+        return name_search_keys(self.name)[2]
 
 
 class GraphFamilyUnit(BaseModel):
