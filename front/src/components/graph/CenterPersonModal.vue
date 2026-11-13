@@ -1,6 +1,6 @@
 <template>
-  <div v-if="open" class="center-modal-backdrop" @click.self="$emit('cancel')">
-    <section class="center-modal">
+  <div v-if="open" class="center-modal-backdrop" @click.self="$emit('cancel')" @keydown.esc.prevent="$emit('cancel')">
+    <section class="center-modal" role="dialog" aria-modal="true" :aria-label="title">
       <header>
         <span>{{ eyebrow }}</span>
         <h2>{{ title }}</h2>
@@ -19,6 +19,7 @@
       </div>
 
       <div class="option-list">
+        <p v-if="!normalizedOptions.length" class="empty-options">{{ mode === 'center' ? '没有找到匹配人物，请调整姓名后搜索。' : '当前没有可用选项。' }}</p>
         <button
           v-for="option in normalizedOptions"
           :key="option.id"
@@ -126,158 +127,29 @@ const normalizedOptions = computed(() => props.options.map(option => {
 </script>
 
 <style scoped>
-.center-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 2400;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: radial-gradient(circle at center, rgba(255, 250, 0, 0.12), rgba(0, 0, 0, 0.72) 48%, rgba(0, 0, 0, 0.86));
-  backdrop-filter: blur(8px);
-}
-
-.center-modal {
-  width: min(620px, calc(100vw - 32px));
-  max-height: min(720px, calc(100vh - 48px));
-  display: grid;
-  gap: 18px;
-  padding: 26px;
-  border-radius: 30px;
-  color: #f7efd0;
-  background:
-    linear-gradient(145deg, rgba(33, 31, 24, 0.98), rgba(18, 19, 18, 0.98)),
-    #181a1b;
-  border: 1px solid rgba(255, 238, 137, 0.32);
-  box-shadow: 0 34px 120px rgba(0, 0, 0, 0.56), inset 0 0 0 1px rgba(255, 250, 0, 0.05);
-  animation: modalRise 0.38s cubic-bezier(.2,.8,.2,1) both;
-}
-
-header span {
-  color: #d4af37;
-  font-size: 12px;
-  letter-spacing: 0.18em;
-}
-
-h2 {
-  margin: 8px 0 0;
-  font-size: 28px;
-}
-
-p {
-  margin: 8px 0 0;
-  color: #b9ad84;
-  line-height: 1.7;
-}
-
-.search-box {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-}
-
-input {
-  min-width: 0;
-  border: 1px solid rgba(255, 238, 137, 0.2);
-  border-radius: 999px;
-  padding: 13px 16px;
-  color: #fff8d6;
-  background: rgba(8, 9, 9, 0.72);
-}
-
-input:focus {
-  outline: 3px solid rgba(255, 250, 0, 0.12);
-  border-color: rgba(255, 250, 0, 0.7);
-}
-
-.option-list {
-  max-height: 360px;
-  display: grid;
-  gap: 10px;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.option-card {
-  display: grid;
-  grid-template-columns: 44px 1fr auto;
-  align-items: center;
-  gap: 12px;
-  border: 1px solid rgba(255, 238, 137, 0.16);
-  border-radius: 18px;
-  padding: 12px;
-  color: #f7efd0;
-  text-align: left;
-  background: rgba(255, 255, 255, 0.045);
-  cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
-}
-
-.option-card:hover,
-.option-card.selected {
-  transform: translateY(-1px);
-  border-color: rgba(255, 250, 0, 0.5);
-  background: rgba(255, 250, 0, 0.09);
-}
-
-.avatar {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 14px;
-  color: #141414;
-  font-weight: 900;
-  background: linear-gradient(135deg, #fffa00, #d4af37);
-}
-
-.option-main {
-  display: grid;
-  gap: 4px;
-}
-
-.option-main small {
-  color: #a69d78;
-}
-
-.check {
-  color: #fffa00;
-  font-size: 12px;
-}
-
-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-button {
-  border: 0;
-  border-radius: 999px;
-  padding: 11px 18px;
-  cursor: pointer;
-}
-
-.search-box button,
-.primary {
-  color: #101010;
-  font-weight: 800;
-  background: linear-gradient(135deg, #fffa00, #d4af37);
-}
-
-.primary:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.ghost {
-  color: #f7efd0;
-  border: 1px solid rgba(255, 238, 137, 0.18);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-@keyframes modalRise {
-  from { opacity: 0; transform: translateY(18px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
+.center-modal-backdrop { position: fixed; inset: 0; z-index: 2400; display: grid; place-items: center; padding: 20px; overflow-y: auto; background: rgba(23, 43, 34, .3); backdrop-filter: blur(4px); }
+.center-modal { width: min(560px, 100%); max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; gap: 20px; padding: 28px; border: 1px solid var(--line); border-radius: 18px; color: var(--ink); background: #fff; box-shadow: 0 24px 90px rgba(32, 59, 50, .15); overflow-y: auto; }
+header, .search-box, footer { flex-shrink: 0; }
+header span { color: var(--copper); font-size: 11px; letter-spacing: .08em; }
+h2 { margin: 9px 0 0; font-size: 23px; font-weight: 600; }
+p { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.search-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+input { min-width: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: #f9faf7; font-size: 13px; }
+input:focus { border-color: var(--green); }
+.option-list { min-height: 0; max-height: 340px; overflow-y: auto; display: grid; align-content: start; gap: 8px; padding: 2px; }
+.option-card { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); text-align: left; background: #fff; }
+.option-card:hover { background: #f7faf6; border-color: #afc7b7; }
+.option-card.selected { border-color: var(--green); background: var(--green-soft); }
+.avatar { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; color: var(--green); background: #edf1e9; font-family: 'SimSun', serif; font-size: 19px; }
+.option-main { display: grid; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
+.option-main strong { font-size: 14px; font-weight: 600; }
+.option-main small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.check { color: var(--green); font-size: 11px; }
+footer { display: flex; justify-content: flex-end; gap: 10px; padding-top: 4px; }
+button { padding: 10px 19px; border: 1px solid transparent; border-radius: 8px; font-size: 13px; }
+.search-box button, .primary { color: #fff; background: var(--green); }
+.primary:disabled { opacity: .45; }
+.ghost { color: var(--muted); border-color: var(--line); background: #fff; }
+.empty-options { padding: 20px 8px; text-align: center; }
+@media (max-width: 600px) { .center-modal-backdrop { padding: 14px; } .center-modal { max-height: calc(100dvh - 28px); padding: 23px 20px; gap: 16px; } h2 { font-size: 21px; } .option-card { padding: 10px; gap: 9px; } }
 </style>

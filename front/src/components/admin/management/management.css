@@ -1,0 +1,77 @@
+.family-data-manager { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; box-sizing: border-box; padding: 32px; color: #203b32; background: #183b324d; backdrop-filter: blur(7px); font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+.family-data-manager *, .family-data-manager *::before, .family-data-manager *::after { box-sizing: border-box; }
+.family-data-manager .management-dialog { position: relative; display: flex; flex-direction: column; width: min(1080px, 100%); height: min(820px, calc(100dvh - 64px)); min-height: 0; overflow: hidden; border: 1px solid #dfe5de; border-radius: 22px; outline: 0; background: #fff; box-shadow: 0 30px 110px #19392c40; }
+.family-data-manager button, .family-data-manager input, .family-data-manager select, .family-data-manager textarea { font-family: inherit; }
+.family-data-manager button:focus-visible { outline: 3px solid #afc8b3; outline-offset: 3px; }
+.family-data-manager button:disabled { opacity: .5; cursor: default; }
+.family-data-manager .management-header { display: flex; align-items: center; flex-shrink: 0; gap: 17px; padding: 25px 30px 24px; background: #f6f4ef; border-bottom: 1px solid #e2e6dc; }
+.family-data-manager .management-mark { display: grid; place-items: center; width: 54px; height: 62px; color: #2d6a54; border: 1px solid #a6bba4; border-radius: 12px 12px 4px 4px; font-family: "Noto Serif SC", SimSun, serif; font-size: 28px; }
+.family-data-manager .management-title { flex: 1; min-width: 0; }
+.family-data-manager .management-title p { margin: 0 0 5px; color: #8d987f; font-size: 9px; letter-spacing: 2.5px; }
+.family-data-manager .management-title h2 { margin: 0; font-family: "Noto Serif SC", SimSun, serif; font-size: 24px; font-weight: 500; letter-spacing: 2px; }
+.family-data-manager .management-title > span { display: block; margin-top: 8px; font-size: 11px; color: #8a947f; }
+.family-data-manager .close-management { display: grid; place-items: center; flex-shrink: 0; width: 34px; height: 34px; padding: 0; border: 1px solid #dde3d7; border-radius: 50%; color: #64745e; background: #fff8; font-size: 24px; cursor: pointer; }
+.family-data-manager .management-tabs { display: flex; gap: 27px; padding: 0 30px; border-bottom: 1px solid #e3e8dd; background: #fff; flex-shrink: 0; }
+.family-data-manager .management-tabs > button { position: relative; padding: 18px 0 16px; border: 0; color: #8a9480; background: none; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.family-data-manager .management-tabs > button.active { color: #2d6a54; font-weight: 600; }
+.family-data-manager .management-tabs > button.active::after { position: absolute; content: ''; bottom: 0; height: 3px; inset-inline: 0; border-radius: 3px 3px 0 0; background: #2d6a54; }
+.family-data-manager .management-tabs > button > span { margin-left: 7px; color: #a0a994; font-size: 10px; }
+.family-data-manager .management-tabs .refresh-management { margin-left: auto; font-size: 11px; color: #6a8063; }
+.family-data-manager .management-body { display: grid; grid-template-columns: 270px minmax(0, 1fr); min-height: 0; flex: 1; }
+.family-data-manager .management-body.relation-body { display: block; overflow-y: auto; }
+.family-data-manager .management-body.is-loading { opacity: .55; pointer-events: none; }
+.family-data-manager .record-sidebar { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid #e4e8df; background: #fcfcf9; }
+.family-data-manager .record-search { padding: 22px 18px 10px; }
+.family-data-manager .record-search input { width: 100%; min-width: 0; padding: 11px 10px; border: 1px solid #dce3d7; border-radius: 8px; color: #355241; background: #fff; font-size: 11px; outline-color: #9cb397; }
+.family-data-manager .add-record { margin: 0 18px 18px; padding: 10px; border: 1px dashed #b8cbb1; border-radius: 8px; color: #547549; background: #f1f6ed; font-size: 12px; cursor: pointer; }
+.family-data-manager .record-list { min-height: 0; flex: 1; overflow-y: auto; padding: 0 10px; }
+.family-data-manager .record-button { display: flex; align-items: center; gap: 12px; width: 100%; margin: 0 0 5px; padding: 12px 10px; border: 1px solid transparent; border-radius: 10px; text-align: left; color: #36563e; background: transparent; cursor: pointer; }
+.family-data-manager .record-button:hover { background: #f2f5ed; }
+.family-data-manager .record-button.selected { border-color: #ccd9c5; background: #eaf1e4; }
+.family-data-manager .record-avatar { flex-shrink: 0; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #dfe6d6; border-radius: 50%; color: #698354; background: #f6f8ef; font-family: SimSun, serif; font-size: 16px; }
+.family-data-manager .record-avatar.deceased { color: #929781; background: #f1f0e8; }
+.family-data-manager .record-button > span:not(.record-avatar):not(.record-arrow) { min-width: 0; display: grid; gap: 6px; }
+.family-data-manager .record-button strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.family-data-manager .record-button small { font-size: 10px; color: #8f9a81; }
+.family-data-manager .record-arrow { margin-left: auto; color: #b3bca6; }
+.family-data-manager .family-record { min-height: 65px; }
+.family-data-manager .sidebar-empty { padding: 30px 15px; color: #929b85; font-size: 12px; text-align: center; }
+.family-data-manager .sidebar-footer { padding: 15px 22px; border-top: 1px solid #e8ece1; font-size: 10px; color: #929b85; }
+.family-data-manager .record-editor { min-height: 0; overflow-y: auto; }
+.family-data-manager .record-danger-zone { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid #e9e9df; margin: 4px 28px 0; padding: 22px 0 28px; }
+.family-data-manager .record-danger-zone p { margin: 0; max-width: 340px; color: #999784; font-size: 10px; line-height: 1.7; }
+.family-data-manager .eyebrow { margin: 0 0 7px; color: #87927d; font-size: 10px; letter-spacing: 2px; }
+.family-data-manager h3 { margin: 0; font-size: 23px; font-weight: 600; }
+.family-data-manager .muted { color: #87927c; font-size: 12px; line-height: 1.8; }
+.family-data-manager .admin-form .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 17px; }
+.family-data-manager .admin-form label { display: flex; flex-direction: column; gap: 8px; color: #476050; font-size: 13px; }
+.family-data-manager .admin-form input, .family-data-manager .admin-form select { width: 100%; min-width: 0; padding: 11px 12px; border: 1px solid #d6ded7; border-radius: 9px; color: #203b32; background: #fff; font-size: 14px; }
+.family-data-manager .admin-form input:focus, .family-data-manager .admin-form select:focus { border-color: #2d6a54; outline: 3px solid #e9f0e9; }
+.family-data-manager .wide { grid-column: 1 / -1; }
+.family-data-manager .form-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.family-data-manager .form-actions > small { margin-right: auto; max-width: 100%; color: #929b85; font-size: 10px; overflow-wrap: anywhere; }
+.family-data-manager .primary, .family-data-manager .secondary, .family-data-manager .danger-button { border: 1px solid transparent; border-radius: 8px; padding: 10px 16px; color: #fff; background: #2d6a54; cursor: pointer; font-size: 12px; }
+.family-data-manager .secondary { color: #6e7e63; border-color: #d7dfd0; background: #fff; }
+.family-data-manager .danger-button { color: #fff; background: #a25a45; }
+.family-data-manager .text-button { padding: 3px 0; border: 0; color: #46764c; background: none; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.family-data-manager .danger-text { color: #a26a50; }
+.family-data-manager .notice, .family-data-manager .management-banner { padding: 12px 15px; border: 1px solid #ead1c8; border-radius: 9px; color: #9a4a33; background: #fcf3ef; font-size: 12px; overflow-wrap: anywhere; line-height: 1.6; }
+.family-data-manager .management-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; margin: 12px 20px 0; }
+.family-data-manager .management-banner button { border: 0; white-space: nowrap; color: inherit; background: transparent; text-decoration: underline; cursor: pointer; }
+.family-data-manager .management-banner.success { border-color: #dbe6d1; color: #4f7948; background: #f1f7ec; }
+.family-data-manager .empty-editor { display: grid; align-content: center; justify-items: center; min-height: 300px; padding: 50px 20px; text-align: center; }
+.family-data-manager .empty-editor > span { margin-bottom: 20px; color: #b5c4a6; font-family: SimSun, serif; font-size: 40px; }
+.family-data-manager .empty-editor h3 { color: #70805e; font-size: 18px; font-weight: 400; }
+.family-data-manager .empty-editor p, .family-data-manager .empty-list { font-size: 12px; color: #929d83; line-height: 1.8; }
+.family-data-manager .empty-list { padding: 45px 10px; text-align: center; }
+.family-data-manager .delete-confirmation-backdrop { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; padding: 22px; background: #203b3255; }
+.family-data-manager .confirm-card { padding: 24px; border: 1px solid #e2d5c7; border-radius: 13px; color: #664d38; background: #fffcf5; }
+.family-data-manager .delete-confirmation-backdrop .confirm-card { max-width: 440px; box-shadow: 0 25px 80px #203b3230; }
+.family-data-manager .confirm-card h3 { font-size: 20px; }
+.family-data-manager .confirm-card p { color: #927b66; font-size: 12px; line-height: 1.9; }
+.family-data-manager .management-loading { display: grid; place-content: center; justify-items: center; flex: 1; color: #839474; font-size: 13px; }
+.family-data-manager .management-loading > span { width: 26px; height: 26px; border: 2px solid #e0e7d7; border-top-color: #6c8f5a; border-radius: 50%; animation: archive-loading .8s linear infinite; }
+@keyframes archive-loading { to { transform: rotate(360deg); } }
+@media (max-width: 800px) { .family-data-manager { padding: 16px; } .family-data-manager .management-dialog { height: calc(100dvh - 32px); border-radius: 16px; } .family-data-manager .management-body { grid-template-columns: 220px minmax(0, 1fr); } .family-data-manager .management-header { padding: 20px; } .family-data-manager .management-tabs { padding: 0 20px; gap: 20px; } }
+@media (max-width: 600px) { .family-data-manager { padding: 0; } .family-data-manager .management-dialog { height: 100dvh; border-radius: 0; border: 0; } .family-data-manager .management-header { gap: 12px; padding: 16px; } .family-data-manager .management-mark { width: 40px; height: 46px; font-size: 23px; } .family-data-manager .management-title h2 { font-size: 20px; } .family-data-manager .management-title > span { display: none; } .family-data-manager .management-tabs { padding: 0 15px; gap: 18px; overflow-x: auto; } .family-data-manager .management-tabs > button { font-size: 12px; } .family-data-manager .management-tabs .refresh-management { font-size: 10px; } .family-data-manager .management-body { display: flex; flex-direction: column; overflow-y: auto; } .family-data-manager .record-sidebar { border-right: 0; border-bottom: 1px solid #e3e8dd; flex-shrink: 0; } .family-data-manager .record-search { padding: 13px 15px 8px; } .family-data-manager .add-record { margin: 0 15px 10px; padding: 8px; } .family-data-manager .record-list { display: flex; flex-direction: row; flex: none; gap: 5px; padding: 0 10px 10px; overflow-x: auto; overflow-y: hidden; } .family-data-manager .record-button { width: auto; flex-shrink: 0; padding: 9px 12px; gap: 8px; margin: 0; } .family-data-manager .record-avatar { width: 28px; height: 28px; font-size: 13px; } .family-data-manager .record-arrow, .family-data-manager .sidebar-footer { display: none; } .family-data-manager .family-record { min-height: 52px; max-width: 200px; } .family-data-manager .record-editor { overflow-y: visible; flex: 1; min-height: auto; } .family-data-manager .admin-form .field-grid { grid-template-columns: minmax(0, 1fr); } .family-data-manager .record-danger-zone { margin: 0 20px; } .family-data-manager .management-banner { margin-inline: 12px; } }
+@media (prefers-reduced-motion: reduce) { .family-data-manager .management-loading > span { animation: none; } }

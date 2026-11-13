@@ -99,40 +99,35 @@ export const getPendingRequests = async () => {
 /**
  * 获取人员详细信息
  */
-export const getPersonDetail = async (personId, userId = null) => {
-  const params = userId ? { user_id: userId } : {}
-  const response = await api.get(`/genealogy/persons/${personId}/detail`, { params })
+export const getPersonDetail = async (personId) => {
+  const response = await api.get(`/genealogy/persons/${personId}/detail`)
   return response.data
 }
 
 /**
  * 更新人员个人资料（名言和成就）
  */
-export const updatePersonProfile = async (personId, data, userId) => {
-  const response = await api.put(`/genealogy/persons/${personId}/profile?user_id=${userId}`, data)
+export const updatePersonProfile = async (personId, data) => {
+  const response = await api.put(`/genealogy/persons/${personId}/profile`, data)
   return response.data
 }
 
 /**
  * 上传人员头像
  */
-export const uploadAvatar = async (personId, file, userId) => {
+export const uploadAvatar = async (personId, file) => {
   const formData = new FormData()
   formData.append('file', file)
-  const response = await api.post(`/genealogy/persons/${personId}/avatar?user_id=${userId}`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
+  const response = await api.post(`/genealogy/persons/${personId}/avatar`, formData)
   return response.data
 }
 
 /**
  * 上传人员照片
  */
-export const uploadPhoto = async (personId, file, userId) => {
+export const uploadPhoto = async (personId, file) => {
   const formData = new FormData()
   formData.append('file', file)
-  const response = await api.post(`/genealogy/persons/${personId}/photo?user_id=${userId}`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  })
+  const response = await api.post(`/genealogy/persons/${personId}/photo`, formData)
   return response.data
 }

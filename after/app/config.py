@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     postgres_password: str = ""
     postgres_db: str = "familytree"
     server_url: str = "http://localhost:8000"
+    smtp_server: str = "smtp.163.com"
+    smtp_port: int = 465
+    smtp_sender_email: str = ""
+    smtp_sender_password: str = ""
+    smtp_admin_email: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

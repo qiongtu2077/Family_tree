@@ -30,6 +30,8 @@ export function useGraphData() {
   const centerContext = ref(null)
   const isLoading = ref(false)
   const errorMessage = ref('')
+  let graphRequest = 0
+  let contextRequest = 0
 
   const personNodes = computed(() => graph.value.nodes.filter(node => node.type === 'person'))
   const familyUnitNodes = computed(() => graph.value.nodes.filter(node => node.type === 'familyUnit'))
@@ -40,7 +42,13 @@ export function useGraphData() {
    */
   async function loadPeople() {
     try {
-      people.value = await getPersons(0, 1000)
+      const allPeople = []
+      let page = []
+      do {
+        page = await getPersons(allPeople.length, 1000)
+        allPeople.push(...page)
+      } while (page.length === 1000)
+      people.value = allPeople
       return people.value
     } catch (error) {
       errorMessage.value = extractErrorMessage(error)
@@ -74,11 +82,15 @@ export function useGraphData() {
    */
   async function loadCenterContext(personId) {
     if (!personId) return null
+    const request = ++contextRequest
     try {
-      centerContext.value = await getCenterContext(personId)
+      const context = await getCenterContext(personId)
+      if (request !== contextRequest) return null
+      centerContext.value = context
       centerPersonId.value = centerContext.value.person.id
       return centerContext.value
     } catch (error) {
+      if (request !== contextRequest) return null
       errorMessage.value = extractErrorMessage(error)
       centerContext.value = null
       centerPersonId.value = personId
@@ -94,26 +106,33 @@ export function useGraphData() {
     expectedCenterPersonId = null,
     emptyViewMode = 'mainline'
   ) {
+    const request = ++graphRequest
     isLoading.value = true
     errorMessage.value = ''
     try {
       const data = await loader()
+      if (request !== graphRequest) return null
       if (!isRenderableGraph(data)) {
-        errorMessage.value = '接口返回空图谱，请先初始化 Neo4j 测试数据'
-        graph.value = emptyGraph(emptyViewMode, expectedCenterPersonId)
-        centerPersonId.value = expectedCenterPersonId
+        errorMessage.value = '当前范围没有可展示人物，请选择其他人物或在资料管理中添加成员'
+        if (!graph.value.nodes.length) {
+          graph.value = emptyGraph(emptyViewMode, expectedCenterPersonId)
+          centerPersonId.value = expectedCenterPersonId
+        }
         return graph.value
       }
       graph.value = data
       centerPersonId.value = data.view_context?.center_person_id || data.center_person_id || expectedCenterPersonId
       return data
     } catch (error) {
+      if (request !== graphRequest) return null
       errorMessage.value = extractErrorMessage(error)
-      graph.value = emptyGraph(emptyViewMode, expectedCenterPersonId)
-      centerPersonId.value = expectedCenterPersonId
+      if (!graph.value.nodes.length) {
+        graph.value = emptyGraph(emptyViewMode, expectedCenterPersonId)
+        centerPersonId.value = expectedCenterPersonId
+      }
       return graph.value
     } finally {
-      isLoading.value = false
+      if (request === graphRequest) isLoading.value = false
     }
   }
 

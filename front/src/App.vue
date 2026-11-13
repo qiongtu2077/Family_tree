@@ -3,7 +3,7 @@
     <div class="loading-card">
       <span></span>
       <strong>正在校验登录状态</strong>
-      <p>族谱门房正在核对名册，请稍候。</p>
+      <p>正在恢复您的族谱工作区，请稍候。</p>
     </div>
   </div>
   <LoginPage v-else-if="!isLoggedIn" />
@@ -20,11 +20,11 @@
  * 前端应用入口。
  * 登录前显示认证页，登录后进入模块化族谱系统。
  */
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import LoginPage from './components/LoginPage.vue'
 import FamilyGraphView from './views/FamilyGraphView.vue'
 import { useAuth } from './composables/useAuth'
-import { useWaveBackground } from './composables/useWaveBackground'
+import { SESSION_EXPIRED_EVENT } from './api/http'
 
 const {
   isLoggedIn,
@@ -32,14 +32,15 @@ const {
   isAdmin,
   isCheckingAuth,
   handleLogout,
-  checkLoginStatus
+  checkLoginStatus,
+  handleSessionExpired
 } = useAuth()
 
-useWaveBackground()
-
 onMounted(() => {
+  window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
   checkLoginStatus()
 })
+onBeforeUnmount(() => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired))
 </script>
 
 <style scoped>
@@ -47,7 +48,7 @@ onMounted(() => {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: transparent;
+  background: var(--paper);
 }
 
 .loading-card {
@@ -55,10 +56,10 @@ onMounted(() => {
   padding: 34px;
   border-radius: 28px;
   text-align: center;
-  color: #f0f0f0;
-  background: rgba(25, 25, 25, 0.94);
-  border: 1px solid rgba(255, 250, 0, 0.24);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 60px rgba(32, 59, 50, 0.06);
   animation: floatIn 0.5s ease both;
 }
 
@@ -67,8 +68,8 @@ onMounted(() => {
   height: 42px;
   margin: 0 auto 16px;
   display: block;
-  border: 4px solid rgba(255, 250, 0, 0.18);
-  border-top-color: #fffa00;
+  border: 3px solid var(--green-soft);
+  border-top-color: var(--green);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
@@ -80,7 +81,7 @@ onMounted(() => {
 
 .loading-card p {
   margin-top: 8px;
-  color: #888;
+  color: var(--muted);
 }
 
 @keyframes spin {

@@ -1,21 +1,20 @@
-import { chromium } from 'playwright'
+/** 使用真实页面巡检五图及维护面板；除登录会话外，默认只读取现有资料。 */
+import { chromium, request } from 'playwright'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const FRONT_ROOT = path.resolve(__dirname, '..')
+const FRONT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const REPORT_DIR = path.join(FRONT_ROOT, 'e2e', 'artifacts', 'visual-graph-audit')
 const FRONTEND_URL = process.env.FAMILYTREE_E2E_URL || 'http://127.0.0.1:3000'
 const API_URL = process.env.FAMILYTREE_API_URL || 'http://127.0.0.1:8000'
 const USERNAME = process.env.FAMILYTREE_E2E_USERNAME || 'admin'
 const PASSWORD = process.env.FAMILYTREE_E2E_PASSWORD || readPasswordFromLocalFile()
 const CENTER_NAME = process.env.FAMILYTREE_E2E_CENTER_NAME || '张明远'
-const RELATION_FROM_ID = process.env.FAMILYTREE_E2E_RELATION_FROM || 'demo:child'
-const RELATION_TO_ID = process.env.FAMILYTREE_E2E_RELATION_TO || 'demo:grandfather'
+const CENTER_ID = process.env.FAMILYTREE_E2E_CENTER_ID || ''
+const PREPARE_DATA = process.env.FAMILYTREE_E2E_PREPARE_DATA === '1'
 const CHROME_EXECUTABLE = process.env.PLAYWRIGHT_CHROME_EXECUTABLE || findSystemChrome()
-
 const VIEWS = {
   mainline: { mode: 'mainline', label: '本家主线', title: '本家主线图' },
   inlaw: { mode: 'inlaw', label: '姻亲谱系', title: '姻亲谱系图' },
@@ -23,641 +22,477 @@ const VIEWS = {
   branch: { mode: 'branch', label: '后代分支', title: '后代分支图' },
   overview: { mode: 'overview', label: '家族全景', title: '家族全景图' }
 }
-
+const SCREEN_SIZES = [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1024, height: 900 }, { width: 1280, height: 900 }]
 const screenshots = []
 const findings = []
 const auditCases = []
 const visitedCapsuleIds = new Set()
+let api = null
 let centerPerson = null
 let centerContext = null
 
-/**
- * 执行浏览器端到端视觉巡检。
- */
+// --- 登录会话与只读运行边界 --- //
+
+/** 登录 API 和实际页面，执行全部验收，中途失败时仍保存报告。 */
 async function main() {
   await mkdir(REPORT_DIR, { recursive: true })
-  if (process.env.FAMILYTREE_E2E_PREPARE_DATA !== '0') await prepareBackendData()
-  centerPerson = await resolveCenterPerson()
-  centerContext = await getJson(`/api/graph/center-context/${encodeURIComponent(centerPerson.id)}`)
-
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: CHROME_EXECUTABLE || undefined
-  })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 980 }, deviceScaleFactor: 1 })
-  page.on('pageerror', error => {
-    findings.push({ severity: 'error', view: 'browser-runtime', message: error.message })
-  })
-
+  let browser = null
+  let page = null
   try {
+    if (!PASSWORD) throw new Error('缺少本地巡检凭据：请设置 FAMILYTREE_E2E_PASSWORD 或配置未跟踪的账密文件')
+    api = await request.newContext({ baseURL: API_URL })
+    const user = (await apiJson('/api/auth/login', 'POST', { username: USERNAME, password: PASSWORD })).user
+    if (!user?.is_admin) throw new Error('完整巡检需要现有管理员账号，以读取资料管理和账号审批面板')
+    if (PREPARE_DATA) await prepareBackendData()
+    centerPerson = await resolveCenterPerson()
+    centerContext = await apiJson(`/api/graph/center-context/${encodeURIComponent(centerPerson.id)}`)
+    browser = await chromium.launch({ headless: true, executablePath: CHROME_EXECUTABLE || undefined })
+    page = await browser.newPage({ viewport: { width: 1440, height: 980 }, deviceScaleFactor: 1 })
+    await protectReadOnlyBrowser(page)
     await page.goto(FRONTEND_URL, { waitUntil: 'domcontentloaded' })
-    await login(page)
+    await loginThroughPage(page)
     await selectCenterPerson(page)
-
+    // 刷新后必须凭服务端 Cookie 恢复会话。
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.getByRole('heading', { name: '家族谱系', exact: true }).waitFor()
+    await waitForGraphSettled(page, 'mainline')
+    auditCases.push({ id: 'cookie-session-restore', status: 'passed' })
     await auditMainline(page)
-    await auditSpouseDrivenViews(page)
+    await auditSpouseViews(page)
     await auditBranchViews(page)
     await auditOverviewViews(page)
     await auditRelationPath(page)
-    await writeReport()
-  } finally {
-    await browser.close()
-  }
-
-  if (findings.some(item => item.severity === 'error')) {
-    console.error(JSON.stringify({ findings, screenshots, auditCases }, null, 2))
-    process.exit(1)
-  }
-}
-
-/**
- * 初始化后端演示账号和 PostgreSQL 示例族谱。
- */
-async function prepareBackendData() {
-  await requireOk(`${API_URL}/health`, { method: 'GET' }, '后端健康检查失败')
-  await fetchIgnore400(`${API_URL}/api/auth/init-demo-users`, { method: 'POST' })
-  await fetchIgnore400(`${API_URL}/api/admin/init-database`, { method: 'POST' })
-  await requireOk(`${API_URL}/api/admin/seed-demo-family`, { method: 'POST' }, '初始化 PostgreSQL 示例族谱失败')
-}
-
-/**
- * 根据当前数据库搜索中心人物。
- */
-async function resolveCenterPerson() {
-  const candidates = await getJson(`/api/graph/center-candidates?keyword=${encodeURIComponent(CENTER_NAME)}&limit=20`)
-  const exact = candidates.find(person => person.name === CENTER_NAME) || candidates[0]
-  if (!exact) throw new Error(`未找到中心人物候选: ${CENTER_NAME}`)
-  return exact
-}
-
-/**
- * 登录系统。
- */
-async function login(page) {
-  await page.waitForSelector('text=进入族谱', { timeout: 12000 })
-  await page.getByPlaceholder('请输入账号').fill(USERNAME)
-  await page.getByPlaceholder('请输入密码').fill(PASSWORD)
-  await page.getByRole('button', { name: '进入族谱' }).click()
-  await page.waitForSelector('text=族谱系统', { timeout: 15000 })
-}
-
-/**
- * 选择中心人物。
- */
-async function selectCenterPerson(page) {
-  await page.waitForSelector('text=选择中心人物', { timeout: 15000 })
-  const modal = page.locator('.center-modal')
-  const search = modal.getByPlaceholder('输入姓名搜索中心人物')
-  if (await search.count()) {
-    await search.fill(CENTER_NAME)
-    await modal.getByRole('button', { name: '搜索' }).click()
-  }
-  await page.waitForSelector(`text=${CENTER_NAME}`, { timeout: 12000 })
-  await modal.getByText(CENTER_NAME, { exact: true }).click()
-  await modal.getByRole('button', { name: '确认' }).click()
-  await page.waitForSelector(`text=${VIEWS.mainline.title}`, { timeout: 15000 })
-  await waitForGraphSettled(page)
-}
-
-/**
- * 巡检本家主线和主线上的折叠入口。
- */
-async function auditMainline(page) {
-  await openView(page, VIEWS.mainline)
-  await auditCurrentView(page, {
-    id: 'mainline',
-    expectedMode: 'mainline',
-    label: '本家主线'
-  })
-  await auditCapsulesFromCurrentView(page, 'mainline', async () => {
     await resetCenterToMainline(page)
+    await auditZoomAndResponsiveViews(page)
+  } catch (error) {
+    findings.push({ severity: 'error', view: 'audit-runtime', message: error.message })
+    if (page && !page.isClosed()) {
+      try { await takeScreenshot(page, 'failure') } catch { /* 页面崩溃时保留原始错误。 */ }
+    }
+  } finally {
+    await writeReport()
+    await browser?.close()
+    await api?.dispose()
+  }
+  console.log(JSON.stringify({ report: path.relative(FRONT_ROOT, path.join(REPORT_DIR, 'report.json')), auditCaseCount: auditCases.length, screenshotCount: screenshots.length, findings }, null, 2))
+  if (findings.length) process.exitCode = 1
+}
+
+/** 只有显式 PREPARE_DATA=1 才初始化演示账号、表和演示族谱。 */
+async function prepareBackendData() {
+  await apiJson('/api/auth/init-demo-users', 'POST')
+  await apiJson('/api/admin/init-database', 'POST')
+  await apiJson('/api/admin/seed-demo-family', 'POST')
+}
+
+/** 使用自动携带 Cookie 的 API 上下文；错误中不输出凭据或 Set-Cookie。 */
+async function apiJson(pathname, method = 'GET', data) {
+  const response = await api.fetch(pathname, { method, ...(data === undefined ? {} : { data }) })
+  if (!response.ok()) throw new Error(`接口请求失败：${method} ${pathname}，HTTP ${response.status()}`)
+  return response.status() === 204 ? null : response.json()
+}
+
+/** 阻止页面意外写入资料、审批、注册或发邮件，并记录浏览器异常。 */
+async function protectReadOnlyBrowser(page) {
+  await page.route('**/api/**', async route => {
+    const operation = route.request()
+    const pathname = new URL(operation.url()).pathname
+    if (['GET', 'HEAD', 'OPTIONS'].includes(operation.method()) || (operation.method() === 'POST' && pathname === '/api/auth/login')) {
+      await route.continue()
+      return
+    }
+    findings.push({ severity: 'error', view: 'read-only-boundary', message: `已阻止页面写请求：${operation.method()} ${pathname}` })
+    await route.abort('blockedbyclient')
+  })
+  page.on('pageerror', error => findings.push({ severity: 'error', view: 'browser-runtime', message: error.message }))
+  page.on('response', response => {
+    const pathname = new URL(response.url()).pathname
+    // 未登录时 /me 的 401 属于正常会话探测。
+    if (pathname.startsWith('/api/') && response.status() >= 400 && !(pathname === '/api/auth/me' && response.status() === 401)) findings.push({ severity: 'error', view: 'browser-api', message: `${response.request().method()} ${pathname} 返回 HTTP ${response.status()}` })
   })
 }
 
-/**
- * 巡检所有配偶驱动视图。
- */
-async function auditSpouseDrivenViews(page) {
-  const spouseOptions = centerContext.available_spouses || []
-  if (!spouseOptions.length) {
-    findings.push({ severity: 'error', view: 'spouse-options', message: '中心人物没有可测试的配偶/伴侣选项' })
+/** 提交新版登录表单，检验浏览器会话建立。 */
+async function loginThroughPage(page) {
+  await page.getByRole('heading', { name: '登录族谱', exact: true }).waitFor({ timeout: 15000 })
+  await page.getByLabel('账号', { exact: true }).fill(USERNAME)
+  await page.getByPlaceholder('请输入密码', { exact: true }).fill(PASSWORD)
+  const response = page.waitForResponse(result => new URL(result.url()).pathname === '/api/auth/login' && result.request().method() === 'POST')
+  await page.getByRole('button', { name: '进入族谱' }).click()
+  if (!(await response).ok()) throw new Error('页面登录失败，请核对前端代理目标与隔离服务账号')
+  await page.getByRole('heading', { name: '家族谱系', exact: true }).waitFor({ timeout: 15000 })
+}
+
+/** 优先使用明确中心 ID，否则按姓名读取已认证的候选接口。 */
+async function resolveCenterPerson() {
+  if (CENTER_ID) return apiJson(`/api/persons/${encodeURIComponent(CENTER_ID)}`)
+  const people = await apiJson(`/api/graph/center-candidates?keyword=${encodeURIComponent(CENTER_NAME)}&limit=20`)
+  const person = people.find(candidate => candidate.name === CENTER_NAME)
+  if (!person) throw new Error(`未找到中心人物：${CENTER_NAME}；请设置 FAMILYTREE_E2E_CENTER_ID 或 FAMILYTREE_E2E_CENTER_NAME`)
+  return person
+}
+
+// --- 五图、参数与真实折叠入口 --- //
+
+/** 选择 API 已确认的中心人物，使用稳定 ID 避免同名人物误选。 */
+async function selectCenterPerson(page) {
+  const modal = page.getByRole('dialog', { name: '选择中心人物', exact: true })
+  if (!(await modal.isVisible())) await page.locator('.center-btn').click()
+  await modal.getByPlaceholder('输入姓名搜索中心人物').fill(centerPerson.name)
+  await modal.getByRole('button', { name: '搜索', exact: true }).click()
+  await modal.locator(optionSelector(centerPerson.id)).click()
+  await modal.getByRole('button', { name: '确认', exact: true }).click()
+  await modal.waitFor({ state: 'hidden' })
+  await waitForGraphSettled(page, 'mainline')
+}
+
+/** 重选原始中心，清除胶囊导航引入的中心、配偶和家庭参数。 */
+async function resetCenterToMainline(page) {
+  await closePersonDrawer(page)
+  await selectCenterPerson(page)
+}
+
+/** 切换视图，多选项时明确选择目标，再等待异步视图提交。 */
+async function openView(page, view, optionId = '') {
+  await page.getByRole('navigation', { name: '族谱视图' }).getByRole('button', { name: view.label, exact: true }).click()
+  if (optionId) {
+    const available = view.mode === 'branch' ? centerContext.available_family_units : centerContext.available_spouses
+    if (available.length > 1) {
+      const modal = page.locator('.center-modal')
+      await modal.waitFor()
+      await modal.locator(optionSelector(optionId)).click()
+      await modal.getByRole('button', { name: '确认', exact: true }).click()
+      await modal.waitFor({ state: 'hidden' })
+    }
+  }
+  await waitForGraphSettled(page, view.mode)
+}
+
+/** 巡检本家主线及其折叠分支。 */
+async function auditMainline(page) {
+  await auditCurrentView(page, 'mainline', 'mainline')
+  await auditCapsules(page, 'mainline', () => resetCenterToMainline(page))
+}
+
+/** 对真实配偶逐个巡检姻亲与桥接，缺必要资料时明确报告未覆盖。 */
+async function auditSpouseViews(page) {
+  if (!centerContext.available_spouses.length) {
+    findings.push({ severity: 'error', view: 'spouse-fixture', message: '当前中心没有配偶，无法覆盖姻亲谱系和联姻桥接；请选择具备完整家系的验收中心' })
     return
   }
-
-  for (const spouseOption of spouseOptions) {
-    const spouseId = spouseOption.person?.id
-    if (!spouseId) continue
-    const spouseSlug = slug(spouseId)
-
-    await resetCenterToMainline(page)
-    await openViewWithOption(page, VIEWS.inlaw, spouseId)
-    await auditCurrentView(page, {
-      id: `inlaw-${spouseSlug}`,
-      expectedMode: 'inlaw',
-      label: `姻亲谱系:${spouseId}`
-    })
-    await auditCapsulesFromCurrentView(page, `inlaw-${spouseSlug}`, async () => {
+  for (const option of centerContext.available_spouses) {
+    const spouseId = option.person.id
+    for (const view of [VIEWS.inlaw, VIEWS.bridge]) {
       await resetCenterToMainline(page)
-      await openViewWithOption(page, VIEWS.inlaw, spouseId)
-    })
-
-    await openView(page, VIEWS.bridge)
-    await auditCurrentView(page, {
-      id: `bridge-${spouseSlug}`,
-      expectedMode: 'bridge',
-      label: `联姻桥接:${spouseId}`
-    })
-    await auditCapsulesFromCurrentView(page, `bridge-${spouseSlug}`, async () => {
-      await resetCenterToMainline(page)
-      await openViewWithOption(page, VIEWS.inlaw, spouseId)
-      await openView(page, VIEWS.bridge)
-    })
+      await openView(page, view, spouseId)
+      const id = `${view.mode}-${slug(spouseId)}`
+      await auditCurrentView(page, id, view.mode)
+      await auditCapsules(page, id, async () => { await resetCenterToMainline(page); await openView(page, view, spouseId) })
+    }
   }
 }
 
-/**
- * 巡检所有后代分支入口。
- */
+/** 遍历家庭分支；无家庭选项时检验人物根分支。 */
 async function auditBranchViews(page) {
-  const familyOptions = centerContext.available_family_units || []
-  if (!familyOptions.length) {
+  const options = centerContext.available_family_units
+  if (!options.length) {
     await resetCenterToMainline(page)
     await openView(page, VIEWS.branch)
-    await auditCurrentView(page, {
-      id: `branch-person-${slug(centerPerson.id)}`,
-      expectedMode: 'branch',
-      label: `人物后代分支:${centerPerson.id}`
-    })
-    return
+    await auditCurrentView(page, 'branch-person', 'branch')
   }
-
-  for (const familyOption of familyOptions) {
-    const familyUnitId = familyOption.family_unit_id
-    if (!familyUnitId) continue
+  for (const option of options) {
     await resetCenterToMainline(page)
-    await openViewWithOption(page, VIEWS.branch, familyUnitId)
-    await auditCurrentView(page, {
-      id: `branch-${slug(familyUnitId)}`,
-      expectedMode: 'branch',
-      label: `家庭后代分支:${familyUnitId}`
-    })
+    await openView(page, VIEWS.branch, option.family_unit_id)
+    await auditCurrentView(page, `branch-${slug(option.family_unit_id)}`, 'branch')
   }
 }
 
-/**
- * 巡检全景图和中心九族范围。
- */
+/** 检验全家族与中心九族；全景保留真实关系线。 */
 async function auditOverviewViews(page) {
+  await resetCenterToMainline(page)
   await openView(page, VIEWS.overview)
-  await auditCurrentView(page, {
-    id: 'overview-all',
-    expectedMode: 'overview',
-    label: '家族全景:全部'
-  })
-
-  const centerScope = page.getByRole('button', { name: '只看中心九族' })
-  if (await centerScope.count()) {
-    await centerScope.click()
-    await page.waitForSelector(`text=${VIEWS.overview.title}`, { timeout: 15000 })
-    await waitForGraphSettled(page)
-    await auditCurrentView(page, {
-      id: 'overview-center',
-      expectedMode: 'overview',
-      label: '家族全景:中心九族'
-    })
-  }
+  await auditCurrentView(page, 'overview-all', 'overview')
+  await page.getByRole('button', { name: '只看中心九族', exact: true }).click()
+  await waitForGraphSettled(page, 'overview')
+  await auditCurrentView(page, 'overview-center', 'overview')
 }
 
-/**
- * 打开指定图谱视图。
- */
-async function openView(page, view) {
-  await page.getByRole('button', { name: view.label }).click()
-  await page.waitForSelector(`text=${view.title}`, { timeout: 15000 })
-  await settleParameterModal(page)
-  await waitForGraphSettled(page)
-}
-
-/**
- * 打开带参数选择的图谱视图。
- */
-async function openViewWithOption(page, view, optionId) {
-  await page.getByRole('button', { name: view.label }).click()
-  await page.waitForSelector(`text=${view.title}`, { timeout: 15000 })
-  await chooseParameterOption(page, optionId)
-  await waitForGraphSettled(page)
-}
-
-/**
- * 重置中心人物并回到本家主线，清空配偶和分支派生选择。
- */
-async function resetCenterToMainline(page) {
-  await page.getByRole('button', { name: VIEWS.mainline.label }).click()
-  await page.waitForSelector(`text=${VIEWS.mainline.title}`, { timeout: 15000 })
-  await waitForGraphSettled(page)
-
-  await page.locator('.center-btn').click()
-  await page.waitForSelector('text=选择中心人物', { timeout: 15000 })
-  const modal = page.locator('.center-modal')
-  const option = modal.locator(`[data-testid="graph-option-card"][data-option-id="${escapeAttribute(centerPerson.id)}"]`)
-  if (await option.count()) await option.click()
-  await modal.getByRole('button', { name: '确认' }).click()
-  await page.waitForSelector(`text=${VIEWS.mainline.title}`, { timeout: 15000 })
-  await waitForGraphSettled(page)
-}
-
-/**
- * 参数弹窗出现时选择指定选项。
- */
-async function chooseParameterOption(page, optionId) {
-  const modal = page.locator('.center-modal')
-  const visible = await modal.count().then(count => count > 0).catch(() => false)
-  if (!visible) return
-
-  const option = modal.locator(`[data-testid="graph-option-card"][data-option-id="${escapeAttribute(optionId)}"]`)
-  const optionCount = await option.count()
-  if (optionCount !== 1) {
-    findings.push({
-      severity: 'error',
-      view: 'parameter-modal',
-      message: `参数弹窗未找到唯一选项: ${optionId}，实际匹配 ${optionCount} 个`
-    })
-    return
-  }
-  await option.click()
-  await modal.getByRole('button', { name: '确认' }).click()
-}
-
-/**
- * 参数弹窗出现但测试未指定选项时选择第一项。
- */
-async function settleParameterModal(page) {
-  const modal = page.locator('.center-modal')
-  const visible = await modal.count().then(count => count > 0).catch(() => false)
-  if (!visible) return
-
-  const optionCards = modal.locator('[data-testid="graph-option-card"]')
-  const optionCount = await optionCards.count()
-  if (optionCount > 0) {
-    await optionCards.nth(0).click()
-    await modal.getByRole('button', { name: '确认' }).click()
-  }
-}
-
-/**
- * 巡检当前视图里真实渲染出的折叠分支入口。
- */
-async function auditCapsulesFromCurrentView(page, sourceId, restoreSource) {
-  const capsules = await readGraphCapsules(page)
+/** 读取胶囊坐标后真实点击，不调用任何调试业务入口。 */
+async function auditCapsules(page, sourceId, restoreSource) {
+  const capsules = await page.evaluate(() => window.__familyTreeGraphDebug.getCapsules().map(node => ({ id: node.id, targetView: node.raw.target_view })))
   for (const capsule of capsules) {
-    if (!capsule.id || visitedCapsuleIds.has(capsule.id)) continue
+    if (visitedCapsuleIds.has(capsule.id)) continue
     visitedCapsuleIds.add(capsule.id)
-
-    // 详情侧栏会盖住右侧画布，按正常用户操作先关闭再点击入口。
-    const drawerClose = page.locator('.detail-drawer').getByRole('button', { name: '关闭', exact: true })
-    if (await drawerClose.count() === 1) await drawerClose.click()
+    await closePersonDrawer(page)
+    await page.getByRole('button', { name: '适应视图', exact: true }).click()
     await waitForGraphSettled(page)
-    const point = await readCapsulePoint(page, capsule.id)
+    await page.locator('.graph-canvas-shell').scrollIntoViewIfNeeded()
+    const point = await page.evaluate(id => {
+      const point = window.__familyTreeGraphDebug.getViewportPoint(id)
+      return point && document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS' ? point : null
+    }, capsule.id)
     if (!point) {
-      findings.push({ severity: 'error', view: sourceId, message: `无法定位折叠胶囊: ${capsule.id}` })
+      findings.push({ severity: 'error', view: sourceId, message: `胶囊不在可真实点击的画布范围：${capsule.id}` })
       continue
     }
-
-    const targetView = VIEWS[capsule.target_view] || VIEWS.branch
+    const view = VIEWS[capsule.targetView]
+    if (!view) throw new Error(`胶囊具有未定义目标视图：${capsule.targetView}`)
     await page.mouse.click(point.x, point.y)
-    if (!(await waitForViewTitle(page, targetView.title, 5000))) {
-      findings.push({ severity: 'error', view: sourceId, message: `真实点击折叠入口后未进入${targetView.title}: ${capsule.id}`, point })
-    }
-    await waitForGraphSettled(page)
-    await auditCurrentView(page, {
-      id: `capsule-${slug(capsule.id)}`,
-      expectedMode: targetView.mode,
-      label: `折叠入口:${capsule.title || capsule.id}`,
-      source: sourceId
-    })
+    await waitForGraphSettled(page, view.mode)
+    await auditCurrentView(page, `capsule-${slug(capsule.id)}`, view.mode)
     await restoreSource()
   }
 }
 
-/**
- * 等待真实点击后的目标标题出现，失败时记录而不使用调试入口绕过。
- */
-async function waitForViewTitle(page, title, timeout) {
-  try {
-    await page.waitForSelector(`text=${title}`, { timeout })
-    return true
-  } catch {
-    return false
-  }
+/** 关闭可能遮挡真实点击的详情侧栏。 */
+async function closePersonDrawer(page) {
+  const close = page.getByRole('button', { name: '关闭人物详情', exact: true })
+  if (await close.isVisible()) await close.click()
 }
 
-/**
- * 巡检当前视图。
- */
-async function auditCurrentView(page, auditCase) {
-  await waitForGraphSettled(page)
-  const screenshotPath = await takeScreenshot(page, `${auditCase.id}.png`)
-  const metrics = await collectGraphMetrics(page)
-  const visual = await collectVisualMetrics(page)
-  const canvasPath = await takeCanvasScreenshot(page, `${auditCase.id}-canvas.png`)
+// --- 画布像素、布局几何与响应式视野 --- //
 
-  screenshots.push({
-    view: auditCase.id,
-    label: auditCase.label,
-    page: screenshotPath,
-    canvas: canvasPath
-  })
-  auditCases.push({ ...auditCase, metrics, visual })
-  auditGraphMetrics(auditCase, metrics, visual)
+/** 等待开发诊断存在、布局稳定且模式正确，不把加载卡片当成成功。 */
+async function waitForGraphSettled(page, mode = '') {
+  await page.waitForFunction(expected => {
+    const state = window.__familyTreeGraphDebug?.getState()
+    return state && !state.isAnimating && state.layoutNodeCount > 0 && (!expected || state.viewMode === expected) && !document.querySelector('.canvas-state')
+  }, mode, { timeout: 20000 })
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
 
-/**
- * 巡检关系路径面板。
- */
-async function auditRelationPath(page) {
-  await page.getByRole('button', { name: '关系路径' }).click()
-  await page.waitForSelector('text=选择两个人', { timeout: 12000 })
-  await page.locator('select').nth(0).selectOption(RELATION_FROM_ID)
-  await page.locator('select').nth(1).selectOption(RELATION_TO_ID)
-  await page.getByRole('button', { name: '查询关系' }).click()
-  await page.waitForSelector('text=查询结果', { timeout: 12000 })
-  const screenshotPath = await takeScreenshot(page, 'relation-path.png')
-  screenshots.push({ view: 'relation-path', page: screenshotPath })
-
-  const resultText = await page.locator('.result-card').innerText()
-  if (!resultText.includes('路径节点')) {
-    findings.push({
-      severity: 'error',
-      view: 'relation-path',
-      message: '关系路径面板未显示路径节点统计'
-    })
-  }
-  await page.getByRole('button', { name: '关闭' }).click()
-}
-
-/**
- * 读取当前画布中的折叠胶囊。
- */
-async function readGraphCapsules(page) {
-  return page.evaluate(() => {
-    const debug = window.__familyTreeGraphDebug
-    if (!debug?.getCapsules) return []
-    return debug.getCapsules().map(node => ({
-      id: node.id,
-      title: node.raw?.title || node.label || '',
-      target_view: node.raw?.target_view || 'branch',
-      owner_person_id: node.raw?.owner_person_id || '',
-      root_family_unit_id: node.raw?.root_family_unit_id || '',
-      person_count: node.raw?.person_count || 0
-    }))
-  })
-}
-
-/**
- * 读取折叠胶囊在视口中的点击坐标。
- */
-async function readCapsulePoint(page, capsuleId) {
-  return page.evaluate(id => {
-    const debug = window.__familyTreeGraphDebug
-    return debug?.getViewportPoint?.(id) || null
-  }, capsuleId)
-}
-
-/**
- * 收集 G6 画布的 DOM、几何和布局指标。
- */
+/** 读取真实布局、DOM体积、浅色画布墨迹、卡片重叠和关系穿卡指标。 */
 async function collectGraphMetrics(page) {
   return page.evaluate(() => {
+    const debug = window.__familyTreeGraphDebug
+    const state = debug.getState()
+    const layout = debug.getLayout()
     const shell = document.querySelector('.graph-canvas-shell')
     const canvas = document.querySelector('.graph-canvas canvas')
-    const errorText = document.querySelector('.error-card')?.textContent?.trim() || ''
-    const stateText = document.querySelector('.canvas-state')?.textContent?.trim() || ''
-    const status = document.querySelector('.status-card strong')?.textContent?.trim() || ''
-    const container = document.querySelector('.graph-canvas')
-    const bounds = shell?.getBoundingClientRect()
-    const canvasBounds = canvas?.getBoundingClientRect()
-    const debugState = window.__familyTreeGraphDebug?.getState?.() || {}
-
-    return {
-      status,
-      errorText,
-      stateText,
-      hasShell: Boolean(shell),
-      hasCanvas: Boolean(canvas),
-      shellWidth: bounds?.width || 0,
-      shellHeight: bounds?.height || 0,
-      canvasWidth: canvasBounds?.width || 0,
-      canvasHeight: canvasBounds?.height || 0,
-      containerText: container?.textContent || '',
-      devicePixelRatio: window.devicePixelRatio,
-      viewMode: debugState.viewMode || '',
-      rawNodeCount: debugState.rawNodeCount || 0,
-      rawEdgeCount: debugState.rawEdgeCount || 0,
-      layoutNodeCount: debugState.layoutNodeCount || 0,
-      layoutEdgeCount: debugState.layoutEdgeCount || 0,
-      capsuleCount: debugState.capsuleCount || 0
-    }
-  })
-}
-
-/**
- * 收集像素层面的画布指标。
- */
-async function collectVisualMetrics(page) {
-  return page.evaluate(() => {
-    const canvas = document.querySelector('.graph-canvas canvas')
-    if (!canvas) return { hasPixels: false, nonDarkRatio: 0, brightRatio: 0, width: 0, height: 0 }
-
-    const ctx = canvas.getContext('2d')
-    const width = canvas.width
-    const height = canvas.height
-    const step = Math.max(1, Math.floor(Math.sqrt((width * height) / 12000)))
-    const data = ctx.getImageData(0, 0, width, height).data
-    let sampled = 0
-    let nonDark = 0
-    let bright = 0
-    for (let y = 0; y < height; y += step) {
-      for (let x = 0; x < width; x += step) {
-        const index = (y * width + x) * 4
-        const r = data[index]
-        const g = data[index + 1]
-        const b = data[index + 2]
-        const a = data[index + 3]
-        if (a < 20) continue
-        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        sampled += 1
-        if (luminance > 35) nonDark += 1
-        if (r > 180 && g > 150 && b < 120) bright += 1
+    const bounds = shell.getBoundingClientRect()
+    const canvasBounds = canvas.getBoundingClientRect()
+    const positions = new Map(layout.nodes.map(node => [node.id, node]))
+    const visibleNodes = layout.nodes.filter(node => ['person', 'branchCapsule'].includes(node.nodeType))
+    const overlaps = []
+    for (let index = 0; index < visibleNodes.length; index += 1) {
+      const node = visibleNodes[index]
+      for (const other of visibleNodes.slice(index + 1)) {
+        if (Math.abs(node.x - other.x) < (node.size[0] + other.size[0]) / 2 - .1 && Math.abs(node.y - other.y) < (node.size[1] + other.size[1]) / 2 - .1) overlaps.push([node.id, other.id])
       }
     }
+    const diagonalEdges = []
+    const cardCrossings = []
+    for (const edge of layout.edges) {
+      const start = positions.get(edge.source)
+      const end = positions.get(edge.target)
+      if (!start || !end || edge.type !== 'line' || (Math.abs(start.x - end.x) > .01 && Math.abs(start.y - end.y) > .01)) {
+        diagonalEdges.push(edge.id)
+        continue
+      }
+      for (const node of visibleNodes) {
+        const left = node.x - node.size[0] / 2 + .1
+        const right = node.x + node.size[0] / 2 - .1
+        const top = node.y - node.size[1] / 2 + .1
+        const bottom = node.y + node.size[1] / 2 - .1
+        const horizontal = Math.abs(start.y - end.y) < .01 && start.y > top && start.y < bottom && Math.max(start.x, end.x) > left && Math.min(start.x, end.x) < right
+        const vertical = Math.abs(start.x - end.x) < .01 && start.x > left && start.x < right && Math.max(start.y, end.y) > top && Math.min(start.y, end.y) < bottom
+        if (horizontal || vertical) cardCrossings.push([edge.id, node.id])
+      }
+    }
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+    const step = Math.max(1, Math.floor(Math.sqrt(canvas.width * canvas.height / 24000)))
+    let samples = 0
+    let opaqueSamples = 0
+    let inkSamples = 0
+    for (let y = 0; y < canvas.height; y += step) {
+      for (let x = 0; x < canvas.width; x += step) {
+        const offset = (y * canvas.width + x) * 4
+        const luminance = .2126 * pixels[offset] + .7152 * pixels[offset + 1] + .0722 * pixels[offset + 2]
+        samples += 1
+        if (pixels[offset + 3] >= 20) opaqueSamples += 1
+        // 浅色填充和透明背景不计作文字、描边或关系线墨迹。
+        if (pixels[offset + 3] >= 40 && luminance < 225) inkSamples += 1
+      }
+    }
+    const visiblePeople = visibleNodes.filter(node => {
+      const point = debug.getViewportPoint(node.id)
+      return node.nodeType === 'person' && point.x > canvasBounds.left && point.x < canvasBounds.right && point.y > canvasBounds.top && point.y < canvasBounds.bottom
+    }).length
     return {
-      hasPixels: sampled > 0,
-      width,
-      height,
-      nonDarkRatio: sampled ? nonDark / sampled : 0,
-      brightRatio: sampled ? bright / sampled : 0
+      ...state, canvasCount: document.querySelectorAll('.graph-canvas canvas').length,
+      shell: { width: bounds.width, height: bounds.height }, canvas: { width: canvasBounds.width, height: canvasBounds.height },
+      viewport: { width: innerWidth, height: innerHeight }, documentWidth: document.documentElement.scrollWidth,
+      errorText: document.querySelector('.error-card')?.textContent.trim() || '',
+      inkSamples, opaqueSamples, samples, inkRatio: inkSamples / samples, visiblePeople,
+      nonFiniteNodes: layout.nodes.filter(node => !Number.isFinite(node.x) || !Number.isFinite(node.y)).map(node => node.id),
+      duplicateIds: layout.nodes.length - positions.size, renderedFamilyUnits: layout.nodes.filter(node => node.nodeType === 'familyUnit').length,
+      overlaps: overlaps.slice(0, 12), overlapCount: overlaps.length,
+      diagonalEdges: diagonalEdges.slice(0, 12), diagonalEdgeCount: diagonalEdges.length,
+      cardCrossings: cardCrossings.slice(0, 12), cardCrossingCount: cardCrossings.length
     }
   })
 }
 
-/**
- * 根据指标判断当前图谱是否存在明显问题。
- */
-function auditGraphMetrics(auditCase, metrics, visual) {
-  if (metrics.errorText) {
-    findings.push({ severity: 'error', view: auditCase.id, message: `页面错误提示: ${metrics.errorText}` })
+/** 断言单画布、真实墨迹、正交关系和无重叠，并保存当前视图证据。 */
+async function auditCurrentView(page, id, expectedMode) {
+  await waitForGraphSettled(page, expectedMode)
+  const metrics = await collectGraphMetrics(page)
+  auditCases.push({ id, expectedMode, metrics })
+  const checks = [
+    [metrics.viewMode === expectedMode, '实际视图模式不匹配'],
+    [metrics.canvasCount === 1, '页面必须只有一个图谱画布'],
+    [metrics.canvas.width >= 280 && metrics.canvas.height >= 300, '画布体积不足'],
+    [Math.abs(metrics.shell.width - metrics.canvas.width) <= 3 && Math.abs(metrics.shell.height - metrics.canvas.height) <= 3, '画布尺寸未跟随容器'],
+    [metrics.rawNodeCount > 0 && metrics.layoutNodeCount > 0 && metrics.visiblePeople > 0, '接口、布局或当前视口没有真实人物'],
+    [metrics.inkSamples >= 8 && metrics.inkRatio > .0001, '浅色画布未检测到足够真实文字或关系线墨迹'],
+    [!metrics.errorText, `页面显示接口错误：${metrics.errorText}`],
+    [!metrics.nonFiniteNodes.length && !metrics.duplicateIds && !metrics.renderedFamilyUnits, '布局存在非法坐标、重复人物或可见家庭中间节点'],
+    [metrics.overlapCount === 0, '人物或折叠入口卡片重叠'],
+    [metrics.diagonalEdgeCount === 0, '关系线不是明确的水平或垂直线段'],
+    [metrics.cardCrossingCount === 0, '关系线穿过人物或折叠入口卡片'],
+    [metrics.documentWidth <= metrics.viewport.width + 2, '页面产生横向溢出']
+  ]
+  for (const [passed, message] of checks) if (!passed) findings.push({ severity: 'error', view: id, message })
+  await takeScreenshot(page, id)
+  await takeScreenshot(page, `${id}-canvas`, page.locator('.graph-canvas-shell'))
+}
+
+/** 记录同一人物相对画布中心的像素偏移，检验 resize 未隐式适应全图。 */
+async function viewportSnapshot(page) {
+  return page.evaluate(centerId => {
+    const debug = window.__familyTreeGraphDebug
+    const node = debug.getLayout().nodes.find(item => item.id === centerId) || debug.getLayout().nodes.find(item => item.nodeType === 'person')
+    const point = debug.getViewportPoint(node.id)
+    const bounds = document.querySelector('.graph-canvas').getBoundingClientRect()
+    return { nodeId: node.id, zoom: debug.getState().zoom, offsetX: point.x - bounds.left - bounds.width / 2, offsetY: point.y - bounds.top - bounds.height / 2 }
+  }, centerPerson.id)
+}
+
+/** 操作真实缩放按钮和四种视口，检验视野保留、响应式体积及业务面板。 */
+async function auditZoomAndResponsiveViews(page) {
+  await page.getByRole('button', { name: '回到中心', exact: true }).click()
+  const before = await viewportSnapshot(page)
+  await page.getByRole('button', { name: '放大图谱', exact: true }).click()
+  const enlarged = await viewportSnapshot(page)
+  await page.getByRole('button', { name: '缩小图谱', exact: true }).click()
+  const restored = await viewportSnapshot(page)
+  if (enlarged.zoom <= before.zoom || Math.abs(restored.zoom - before.zoom) > 1) findings.push({ severity: 'error', view: 'zoom-controls', message: '放大或缩小按钮未按当前倍率缩放' })
+  auditCases.push({ id: 'zoom-controls', before, enlarged, restored })
+  for (const size of SCREEN_SIZES) {
+    const previous = await viewportSnapshot(page)
+    await page.setViewportSize(size)
+    await page.waitForFunction(({ width, height }) => {
+      const canvas = document.querySelector('.graph-canvas canvas')
+      const container = document.querySelector('.graph-canvas')
+      return innerWidth === width && innerHeight === height && Math.abs(canvas.getBoundingClientRect().width - container.clientWidth) <= 1 && Math.abs(canvas.getBoundingClientRect().height - container.clientHeight) <= 1
+    }, size)
+    await waitForGraphSettled(page, 'mainline')
+    const current = await viewportSnapshot(page)
+    if (current.nodeId !== previous.nodeId || current.zoom !== previous.zoom || Math.abs(current.offsetX - previous.offsetX) > 2 || Math.abs(current.offsetY - previous.offsetY) > 2) findings.push({ severity: 'error', view: `resize-${size.width}`, message: '窗口尺寸变化后倍率或观察的世界坐标被重置', previous, current })
+    auditCases.push({ id: `resize-preserves-view-${size.width}`, previous, current })
+    await auditCurrentView(page, `responsive-${size.width}`, 'mainline')
+    await auditReadOnlyPanels(page, size.width)
   }
-  if (metrics.stateText.includes('暂无图谱数据')) {
-    findings.push({ severity: 'error', view: auditCase.id, message: '画布显示暂无图谱数据' })
-  }
-  if (auditCase.expectedMode && metrics.viewMode && metrics.viewMode !== auditCase.expectedMode) {
-    findings.push({
-      severity: 'error',
-      view: auditCase.id,
-      message: `当前图谱模式不匹配: 期望 ${auditCase.expectedMode}，实际 ${metrics.viewMode}`
+}
+
+// --- 路径与维护面板：只读打开、检查和关闭 --- //
+
+/** 使用明确配置或真实配偶查询路径，核对页面显示的实际人物链。 */
+async function auditRelationPath(page) {
+  const from = process.env.FAMILYTREE_E2E_RELATION_FROM || centerPerson.id
+  const to = process.env.FAMILYTREE_E2E_RELATION_TO || centerContext.available_spouses[0]?.person.id
+  if (!to || from === to) throw new Error('缺少两个不同的路径验收人物，请设置 FAMILYTREE_E2E_RELATION_FROM / FAMILYTREE_E2E_RELATION_TO')
+  const expected = await apiJson(`/api/graph/relation-path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+  if (expected.path.nodes.length < 2) throw new Error('验收路径未返回两位以上真实人物')
+  await page.getByRole('button', { name: '关系路径', exact: true }).click()
+  const panel = page.getByRole('dialog', { name: '关系路径', exact: true })
+  await panel.locator('#relation-from').selectOption(from)
+  await panel.locator('#relation-to').selectOption(to)
+  await panel.getByRole('button', { name: '查询关系', exact: true }).click()
+  await panel.locator('.result-card').waitFor()
+  const names = await panel.locator('.path-chain .path-person > span:not(.path-avatar)').allTextContents()
+  if (names.join('|') !== expected.path.nodes.map(node => node.name).join('|')) findings.push({ severity: 'error', view: 'relation-path', message: '页面人物链与实际接口路径不一致' })
+  if ((await panel.locator('.result-card > strong').innerText()) !== expected.relation_text) findings.push({ severity: 'error', view: 'relation-path', message: '页面亲缘解释与接口不一致' })
+  auditCases.push({ id: 'relation-path', personCount: names.length, edgeCount: expected.path.edges.length })
+  await takeScreenshot(page, 'relation-path')
+  await panel.getByRole('button', { name: '关闭' }).click()
+  await panel.waitFor({ state: 'hidden' })
+}
+
+/** 每个响应式尺寸只读打开面板，检查内容加载、边界和关闭。 */
+async function auditReadOnlyPanels(page, width) {
+  const panels = [
+    { entry: '关系路径', dialog: '关系路径', close: '关闭' },
+    { entry: '我的资料', dialog: '我的资料', close: '关闭 ×' },
+    { entry: '资料管理', dialog: '家族资料管理', close: '关闭资料管理' },
+    { entry: '账号审批', dialog: '账号审批', close: '关闭 ×' }
+  ]
+  for (const item of panels) {
+    await page.locator('.toolbar-actions').getByRole('button', { name: item.entry, exact: true }).click()
+    const panel = page.getByRole('dialog', { name: item.dialog, exact: true })
+    await panel.waitFor()
+    if (item.entry === '资料管理') {
+      await panel.locator('.management-loading').waitFor({ state: 'hidden' })
+      await page.waitForFunction(() => document.querySelector('.management-body')?.getAttribute('aria-busy') === 'false')
+      for (const tab of ['家庭资料', '亲缘关系', '人物档案']) await panel.getByRole('button', { name: new RegExp(`^${tab}`) }).click()
+    } else if (item.entry === '账号审批') await panel.getByText('正在读取注册申请...').waitFor({ state: 'hidden' })
+    else if (item.entry === '我的资料') await panel.getByText('正在读取个人资料...').waitFor({ state: 'hidden' })
+    const metrics = await panel.evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, viewportWidth: innerWidth, viewportHeight: innerHeight, documentWidth: document.documentElement.scrollWidth, errors: [...element.querySelectorAll('[role="alert"]')].map(alert => alert.textContent.trim()) }
     })
-  }
-  if (!metrics.hasCanvas || metrics.canvasWidth < 300 || metrics.canvasHeight < 300) {
-    findings.push({ severity: 'error', view: auditCase.id, message: 'G6 canvas 未正确渲染或尺寸过小', metrics })
-  }
-  if (!metrics.layoutNodeCount || !metrics.rawNodeCount) {
-    findings.push({ severity: 'error', view: auditCase.id, message: '图谱布局数据为空，无法证明画布来自接口数据', metrics })
-  }
-  if (!visual.hasPixels || visual.nonDarkRatio < 0.025) {
-    findings.push({ severity: 'error', view: auditCase.id, message: '画布像素接近空白，未检测到足够图形内容', visual })
-  }
-  if (auditCase.expectedMode !== 'overview' && visual.brightRatio < 0.0008) {
-    findings.push({ severity: 'warning', view: auditCase.id, message: '正式图金色节点/线条占比偏低，需要人工复核', visual })
+    const id = `panel-${slug(item.entry)}-${width}`
+    if (metrics.left < -2 || metrics.top < -2 || metrics.right > metrics.viewportWidth + 2 || metrics.bottom > metrics.viewportHeight + 2 || metrics.scrollWidth > metrics.clientWidth + 2 || metrics.documentWidth > metrics.viewportWidth + 2) findings.push({ severity: 'error', view: id, message: '面板超出视口或出现横向溢出', metrics })
+    if (metrics.errors.length) findings.push({ severity: 'error', view: id, message: metrics.errors.join('；') })
+    auditCases.push({ id, metrics, operation: 'read-only-open-close' })
+    await takeScreenshot(page, id)
+    await panel.getByRole('button', { name: item.close, exact: item.entry !== '关系路径' }).click()
+    await panel.waitFor({ state: 'hidden' })
   }
 }
 
-/**
- * 等待图谱渲染稳定。
- */
-async function waitForGraphSettled(page) {
-  await page.waitForFunction(
-    () => !document.querySelector('.canvas-state')?.textContent?.includes('正在铺开') &&
-      !window.__familyTreeGraphDebug?.getState?.().isAnimating,
-    null,
-    { timeout: 15000 }
-  )
-  await page.waitForTimeout(900)
+// --- 报告与本地配置 --- //
+
+/** 保存整页或画布截图，报告只记录产物相对路径。 */
+async function takeScreenshot(page, name, element = null) {
+  const target = path.join(REPORT_DIR, `${slug(name)}.png`)
+  if (element) await element.screenshot({ path: target })
+  else await page.screenshot({ path: target, fullPage: true })
+  const relative = path.relative(FRONT_ROOT, target)
+  screenshots.push({ id: name, path: relative })
+  return relative
 }
 
-/**
- * 截取整页。
- */
-async function takeScreenshot(page, name) {
-  const target = path.join(REPORT_DIR, name)
-  await page.screenshot({ path: target, fullPage: true })
-  return path.relative(FRONT_ROOT, target)
-}
-
-/**
- * 截取画布区域。
- */
-async function takeCanvasScreenshot(page, name) {
-  const target = path.join(REPORT_DIR, name)
-  const shell = page.locator('.graph-canvas-shell')
-  await shell.screenshot({ path: target })
-  return path.relative(FRONT_ROOT, target)
-}
-
-/**
- * 写巡检报告。
- */
+/** 写实际执行结果，不记录账号、密码、Cookie或未执行的通过结论。 */
 async function writeReport() {
-  const report = {
-    generatedAt: new Date().toISOString(),
-    frontendUrl: FRONTEND_URL,
-    apiUrl: API_URL,
-    centerName: CENTER_NAME,
-    centerPersonId: centerPerson?.id || '',
-    coverage: {
-      spouseOptionCount: centerContext?.available_spouses?.length || 0,
-      familyOptionCount: centerContext?.available_family_units?.length || 0,
-      capsuleCount: visitedCapsuleIds.size,
-      screenshotCount: screenshots.length,
-      auditCaseCount: auditCases.length
-    },
-    screenshots,
-    auditCases,
-    findings
-  }
-  await writeFile(path.join(REPORT_DIR, 'report.json'), JSON.stringify(report, null, 2), 'utf8')
+  await writeFile(path.join(REPORT_DIR, 'report.json'), JSON.stringify({
+    generatedAt: new Date().toISOString(), frontendUrl: FRONTEND_URL, apiUrl: API_URL,
+    dataPreparation: PREPARE_DATA ? 'explicitly-enabled' : 'disabled', centerPersonId: centerPerson?.id || '',
+    coverage: { spouseOptionCount: centerContext?.available_spouses.length || 0, familyOptionCount: centerContext?.available_family_units.length || 0, capsuleCount: visitedCapsuleIds.size, screenshotCount: screenshots.length, auditCaseCount: auditCases.length, responsiveWidths: SCREEN_SIZES.map(size => size.width) },
+    screenshots, auditCases, findings
+  }, null, 2), 'utf8')
 }
 
-/**
- * 读取本地 API JSON。
- */
-async function getJson(pathname) {
-  const response = await requireOk(`${API_URL}${pathname}`, { method: 'GET' }, `接口读取失败: ${pathname}`)
-  return response.json()
+/** 转义项目明确提供的 data-option-id 属性选择器。 */
+function optionSelector(value) {
+  return `[data-testid="graph-option-card"][data-option-id="${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`
 }
 
-/**
- * 调用 API 并要求成功。
- */
-async function requireOk(url, options, errorMessage) {
-  const response = await fetch(url, options)
-  if (!response.ok) {
-    throw new Error(`${errorMessage}: ${response.status} ${await response.text()}`)
-  }
-  return response
-}
-
-/**
- * 初始化接口重复执行时可忽略 400。
- */
-async function fetchIgnore400(url, options) {
-  const response = await fetch(url, options)
-  if (!response.ok && response.status !== 400) {
-    throw new Error(`接口调用失败: ${url}: ${response.status} ${await response.text()}`)
-  }
-  return response
-}
-
-/**
- * 转换为安全文件名片段。
- */
+/** 转换为安全文件名片段，保留中文描述便于人工核对。 */
 function slug(value) {
-  return String(value || 'unknown')
-    .replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 90)
+  return String(value).replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 140)
 }
 
-/**
- * 转义 CSS 属性选择器中的特殊字符。
- */
-function escapeAttribute(value) {
-  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-}
-
-/**
- * 从本地账密文件读取管理员密码。
- */
+/** 仅读取被 Git 忽略的本地密码，不输出文件内容。 */
 function readPasswordFromLocalFile() {
   const credentialFile = path.resolve(FRONT_ROOT, '..', '账密.txt')
   if (!existsSync(credentialFile)) return ''
-  const content = readFileSync(credentialFile, 'utf8')
-  const match = content.match(/Family_tree 管理员密码[：:]\s*(.+)/)
-  return match?.[1]?.trim() || ''
+  return readFileSync(credentialFile, 'utf8').match(/Family_tree 管理员密码[：:]\s*(.+)/)?.[1]?.trim() || ''
 }
 
-/**
- * 优先使用系统 Chrome，避免首次执行时必须下载 Playwright 浏览器。
- */
+/** 优先使用系统 Chrome，否则使用 Playwright 管理的浏览器。 */
 function findSystemChrome() {
-  const candidates = [
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')
-  ]
-  return candidates.find(candidate => candidate && existsSync(candidate)) || ''
+  return ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')].find(candidate => existsSync(candidate)) || ''
 }
 
-main().catch(error => {
-  console.error(error)
-  process.exit(1)
-})
+await main()

@@ -7,8 +7,9 @@ from ..repositories.graph_repository import GraphRepository
 from ..repositories.person_repository import PersonRepository
 from ..services.graph_view_service import GraphViewService
 from ..services.seed_service import SeedService
+from ..security import require_admin
 
-router = APIRouter(prefix="/api/admin", tags=["管理员"])
+router = APIRouter(prefix="/api/admin", tags=["管理员"], dependencies=[Depends(require_admin)])
 
 
 @router.post("/init-database")

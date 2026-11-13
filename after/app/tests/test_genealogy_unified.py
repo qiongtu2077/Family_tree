@@ -56,7 +56,7 @@ def test_legacy_create_and_list_share_unified_people(repository_session):
 def test_legacy_detail_keeps_biological_and_adoptive_facts(repository_session, legacy_family):
     """详情从统一亲子表读取父母，并把生父与养父事实分别保留。"""
     _, user = legacy_family
-    detail = genealogy.get_person_detail("family:child", user.id, repository_session)
+    detail = genealogy.get_person_detail("family:child", user, repository_session)
     person = genealogy.get_person("family:child", repository_session)
 
     assert person["father_id"] == "family:father"
@@ -92,7 +92,7 @@ def test_legacy_profile_and_dates_can_be_cleared(repository_session, legacy_fami
     repository, user = legacy_family
     repository.update_person("family:child", {"motto": "原名言", "birthDate": "2000-01-01"})
 
-    profile = genealogy.update_person_profile("family:child", PersonProfileUpdate(motto=None), user.id, repository_session)
+    profile = genealogy.update_person_profile("family:child", PersonProfileUpdate(motto=None), user, repository_session)
     updated = genealogy.update_person("family:child", PersonUpdate(birth_date=None), repository_session)
 
     assert profile["motto"] is None
@@ -130,9 +130,9 @@ def test_uploads_use_uuid_names_preserve_files_and_save_photos(repository_sessio
     old_file.write_bytes(b"old image")
     repository.update_person("family:child", {"avatar": "/uploads/avatars/old-avatar.png"})
 
-    avatar = genealogy.upload_avatar("family:child", UploadFile(file=BytesIO(b"image"), filename="avatar.png"), user.id, repository_session)
-    photo = genealogy.upload_photo("family:child", UploadFile(file=BytesIO(b"photo"), filename="photo.jpg"), user.id, repository_session)
-    detail = genealogy.get_person_detail("family:child", user.id, repository_session)
+    avatar = genealogy.upload_avatar("family:child", UploadFile(file=BytesIO(b"image"), filename="avatar.png"), user, repository_session)
+    photo = genealogy.upload_photo("family:child", UploadFile(file=BytesIO(b"photo"), filename="photo.jpg"), user, repository_session)
+    detail = genealogy.get_person_detail("family:child", user, repository_session)
 
     assert old_file.read_bytes() == b"old image"
     assert len(Path(avatar["avatar_url"]).stem) == 32
@@ -146,10 +146,10 @@ def test_profile_permission_rejects_unbound_or_inactive_user(repository_session,
     """其他人物和已禁用账号不能通过旧资料接口写入。"""
     _, user = legacy_family
     with pytest.raises(HTTPException) as forbidden:
-        genealogy.update_person_profile("family:outsider", PersonProfileUpdate(motto="无权"), user.id, repository_session)
+        genealogy.update_person_profile("family:outsider", PersonProfileUpdate(motto="无权"), user, repository_session)
     assert forbidden.value.status_code == 403
     user.is_active = False
     repository_session.flush()
     with pytest.raises(HTTPException) as inactive:
-        genealogy.update_person_profile("family:child", PersonProfileUpdate(motto="无效"), user.id, repository_session)
+        genealogy.update_person_profile("family:child", PersonProfileUpdate(motto="无效"), user, repository_session)
     assert inactive.value.status_code == 401

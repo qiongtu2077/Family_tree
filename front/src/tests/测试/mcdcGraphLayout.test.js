@@ -72,11 +72,10 @@ function createPreviewHtml(layout) {
     .filter(node => node.nodeType === 'person' || node.nodeType === 'branchCapsule')
     .map(node => {
       const [width, height] = node.size || [118, 46]
-      const fill = node.nodeType === 'branchCapsule' ? 'rgba(212, 175, 55, 0.18)' : 'rgba(24, 24, 20, 0.94)'
       return `
         <g>
-          <rect x="${node.x - width / 2}" y="${node.y - height / 2}" width="${width}" height="${height}" rx="7" fill="${fill}" stroke="rgba(255,238,137,0.72)" />
-          <text x="${node.x}" y="${node.y + 5}" text-anchor="middle" fill="#fff8d6" font-size="14" font-weight="700">${node.label}</text>
+          <rect x="${node.x - width / 2}" y="${node.y - height / 2}" width="${width}" height="${height}" rx="${node.style.radius}" fill="${node.style.fill}" stroke="${node.style.stroke}" />
+          <text x="${node.x}" y="${node.y + 5}" text-anchor="middle" fill="${node.labelCfg.style.fill}" font-size="14" font-weight="600">${node.label}</text>
         </g>`
     })
     .join('\n')
@@ -86,7 +85,7 @@ function createPreviewHtml(layout) {
       const source = nodeMap.get(item.source)
       const target = nodeMap.get(item.target)
       if (!source || !target) return ''
-      return `<line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" stroke="rgba(224,211,157,0.72)" stroke-width="${item.relation === 'spouse' ? 2 : 1.8}" />`
+      return `<line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" stroke="${item.style.stroke}" stroke-width="${item.style.lineWidth}" stroke-dasharray="${item.style.lineDash?.join(' ') || ''}" />`
     })
     .join('\n')
 
@@ -96,9 +95,9 @@ function createPreviewHtml(layout) {
   <meta charset="utf-8" />
   <title>图谱布局测试预览</title>
   <style>
-    body { margin: 0; background: #10100e; color: #fff8d6; font-family: Arial, "Microsoft YaHei", sans-serif; }
-    header { padding: 16px 20px; border-bottom: 1px solid rgba(255,238,137,0.18); }
-    svg { display: block; width: 100vw; height: calc(100vh - 58px); background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px); background-size: 28px 28px; }
+    body { margin: 0; background: #f7f5ef; color: #203b32; font-family: Arial, "Microsoft YaHei", sans-serif; }
+    header { padding: 16px 20px; border-bottom: 1px solid #ddd9cd; }
+    svg { display: block; width: 100vw; height: calc(100vh - 58px); background-image: radial-gradient(#d9ded5 0.7px, transparent 0.7px); background-size: 28px 28px; }
   </style>
 </head>
 <body>
@@ -124,14 +123,16 @@ function writePreviewArtifact(html) {
 // --- MC/DC 布局测试 --- //
 
 describe('MC/DC graph layout decisions', () => {
-  it('D-L1 lets overview independently switch away from formal genealogy lines', async () => {
+  it('D-L1 lets overview independently pack actual components and retain their relationships', async () => {
     const mainline = await layoutGraph(baseFamilyGraph('mainline'))
     const overview = await layoutGraph(baseFamilyGraph('overview'))
 
     expect(mainline.edges.some(item => item.relation === 'child')).toBe(true)
     expect(mainline.edges.some(item => item.type === 'polyline')).toBe(false)
     expect(overview.nodes.filter(node => node.nodeType === 'person')).toHaveLength(3)
-    expect(overview.edges).toHaveLength(0)
+    expect(overview.edges.some(item => item.relation === 'child')).toBe(true)
+    expect(overview.edges.some(item => item.relation === 'spouse')).toBe(true)
+    expect(overview.clusters).toHaveLength(1)
   })
 
   it('D-L2 requires complete inlaw context before using spouse-origin layout', async () => {

@@ -4,7 +4,6 @@
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-import os
 
 from app.models import Base, User
 from app.routers.auth import hash_password, init_demo_users, serialize_user, verify_password
@@ -39,10 +38,13 @@ def test_serialize_user_excludes_password():
     assert "password" not in payload
 
 
-def test_init_demo_users_creates_and_updates_accounts():
+def test_init_demo_users_creates_and_updates_accounts(monkeypatch):
     """演示账号初始化应可重复执行。"""
-    os.environ["FAMILYTREE_ADMIN_PASSWORD"] = "unit-test-admin-password"
-    os.environ["FAMILYTREE_TEST_PASSWORD"] = "unit-test-user-password"
+    for role, username in (("ADMIN", "admin"), ("TEST", "test")):
+        monkeypatch.setenv(f"FAMILYTREE_{role}_USERNAME", username)
+        monkeypatch.setenv(f"FAMILYTREE_{role}_PASSWORD", f"unit-test-{username}-password")
+        monkeypatch.setenv(f"FAMILYTREE_{role}_EMAIL", f"{username}@example.com")
+        monkeypatch.setenv(f"FAMILYTREE_{role}_REAL_NAME", username)
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -61,5 +63,3 @@ def test_init_demo_users_creates_and_updates_accounts():
         assert users[1].is_admin is False
     finally:
         db.close()
-        os.environ.pop("FAMILYTREE_ADMIN_PASSWORD", None)
-        os.environ.pop("FAMILYTREE_TEST_PASSWORD", None)

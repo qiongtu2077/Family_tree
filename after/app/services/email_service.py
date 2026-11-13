@@ -2,18 +2,19 @@
 邮件服务 - 发送注册审批邮件
 """
 import smtplib
+from html import escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional
-import os
+from ..config import get_settings
 
-# 邮件配置（部署时需要修改）
+# 与数据库及部署 URL 一样，SMTP 同时支持进程环境变量和 after/.env。
+settings = get_settings()
 EMAIL_CONFIG = {
-    "smtp_server": os.getenv("SMTP_SERVER", "smtp.163.com"),
-    "smtp_port": int(os.getenv("SMTP_PORT", "465")),
-    "sender_email": os.getenv("SMTP_SENDER_EMAIL", ""),
-    "sender_password": os.getenv("SMTP_SENDER_PASSWORD", ""),
-    "admin_email": os.getenv("SMTP_ADMIN_EMAIL", ""),
+    "smtp_server": settings.smtp_server,
+    "smtp_port": settings.smtp_port,
+    "sender_email": settings.smtp_sender_email,
+    "sender_password": settings.smtp_sender_password,
+    "admin_email": settings.smtp_admin_email,
 }
 
 
@@ -37,17 +38,10 @@ def send_registration_approval_email(
     Returns:
         是否发送成功
     """
-    # 如果没有配置发送邮箱，使用简化模式（打印到控制台）
+    # 未配置邮件时可在应用内审批，日志不能泄露具有审批权限的随机链接。
     if not EMAIL_CONFIG["sender_email"] or not EMAIL_CONFIG["sender_password"]:
-        print("=" * 60)
-        print("📧 新用户注册申请")
-        print(f"用户名: {username}")
-        print(f"真实姓名: {real_name}")
-        print(f"邮箱: {user_email}")
-        print(f"同意链接: {approve_url}")
-        print(f"拒绝链接: {reject_url}")
-        print("=" * 60)
-        return True
+        print("SMTP 未配置：注册申请已保存，请由管理员在应用内审批。")
+        return False
     
     try:
         # 创建邮件
@@ -56,7 +50,9 @@ def send_registration_approval_email(
         msg["From"] = EMAIL_CONFIG["sender_email"]
         msg["To"] = EMAIL_CONFIG["admin_email"]
         
-        # HTML 邮件内容
+        # 用户资料和授权链接分别进行 HTML 转义，防止申请资料注入邮件内容。
+        safe_username, safe_real_name, safe_email = escape(username), escape(real_name), escape(user_email)
+        safe_approve_url, safe_reject_url = escape(approve_url, quote=True), escape(reject_url, quote=True)
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -77,13 +73,13 @@ def send_registration_approval_email(
             <div class="container">
                 <h1>🌳 族谱系统 - 新用户注册申请</h1>
                 <div class="info">
-                    <p><strong>用户名：</strong>{username}</p>
-                    <p><strong>真实姓名：</strong>{real_name}</p>
-                    <p><strong>邮箱：</strong>{user_email}</p>
+                    <p><strong>用户名：</strong>{safe_username}</p>
+                    <p><strong>真实姓名：</strong>{safe_real_name}</p>
+                    <p><strong>邮箱：</strong>{safe_email}</p>
                 </div>
                 <p>请审批此注册申请：</p>
-                <a href="{approve_url}" class="btn btn-approve">✅ 同意注册</a>
-                <a href="{reject_url}" class="btn btn-reject">❌ 拒绝注册</a>
+                <a href="{safe_approve_url}" class="btn btn-approve">✅ 同意注册</a>
+                <a href="{safe_reject_url}" class="btn btn-reject">❌ 拒绝注册</a>
                 <p style="color: #999; font-size: 12px; margin-top: 30px;">
                     此邮件由族谱查询系统自动发送，请勿回复。
                 </p>
@@ -128,12 +124,12 @@ def send_registration_result_email(
         是否发送成功
     """
     if not EMAIL_CONFIG["sender_email"] or not EMAIL_CONFIG["sender_password"]:
-        status = "已通过" if approved else "已拒绝"
-        print(f"📧 通知用户 {username} ({user_email}): 注册申请{status}")
-        return True
+        print("SMTP 未配置：注册结果已记录，未发送通知邮件。")
+        return False
     
     try:
         msg = MIMEMultipart("alternative")
+        safe_username = escape(username)
         
         if approved:
             msg["Subject"] = f"【族谱系统】注册成功通知"
@@ -141,7 +137,7 @@ def send_registration_result_email(
             <html>
             <body style="font-family: Arial, sans-serif; padding: 20px;">
                 <h2 style="color: #28a745;">🎉 恭喜！您的注册申请已通过</h2>
-                <p>亲爱的 {username}：</p>
+                <p>亲爱的 {safe_username}：</p>
                 <p>您的族谱系统账号已成功创建，现在可以登录使用了。</p>
                 <p style="color: #999; font-size: 12px;">此邮件由族谱查询系统自动发送。</p>
             </body>
@@ -153,7 +149,7 @@ def send_registration_result_email(
             <html>
             <body style="font-family: Arial, sans-serif; padding: 20px;">
                 <h2 style="color: #dc3545;">注册申请未通过</h2>
-                <p>亲爱的 {username}：</p>
+                <p>亲爱的 {safe_username}：</p>
                 <p>很抱歉，您的注册申请未能通过审核。如有疑问，请联系管理员。</p>
                 <p style="color: #999; font-size: 12px;">此邮件由族谱查询系统自动发送。</p>
             </body>

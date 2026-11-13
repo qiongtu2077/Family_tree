@@ -9,7 +9,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],
-      include: ['src/composables/useGraph*.js'],
+      include: ['src/composables/useGraph*.js', 'src/graph/**/*.js'],
+      // Worker 只传递浏览器消息；同一几何核心由下列布局回归直接覆盖。
+      exclude: ['src/graph/layout.worker.js'],
       thresholds: {
         lines: 85,
         functions: 85,

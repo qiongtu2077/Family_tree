@@ -177,7 +177,7 @@ describe('useGraphData', () => {
 
     const graph = await data.loadMainlineGraph('p1')
 
-    expect(data.errorMessage.value).toBe('接口返回空图谱，请先初始化 Neo4j 测试数据')
+    expect(data.errorMessage.value).toBe('当前范围没有可展示人物，请选择其他人物或在资料管理中添加成员')
     expect(graph.nodes).toEqual([])
     expect(graph.center_person_id).toBe('p1')
   })
@@ -205,5 +205,62 @@ describe('useGraphData', () => {
     expect(relation.relation_text).toBe('父亲')
     expect(issues).toHaveLength(1)
     expect(data.relationPath.value).toEqual(relation)
+  })
+
+  it('loads complete person pages rather than silently dropping records after 1000', async () => {
+    const first = Array.from({ length: 1000 }, (_, index) => ({ id: `p${index}`, name: `家人${index}` }))
+    getPersons.mockResolvedValueOnce(first).mockResolvedValueOnce([{ id: 'p1000', name: '最后一人' }])
+    const data = useGraphData()
+
+    await data.loadPeople()
+
+    expect(getPersons).toHaveBeenNthCalledWith(2, 1000, 1000)
+    expect(data.people.value).toHaveLength(1001)
+    expect(data.people.value.at(-1).id).toBe('p1000')
+  })
+
+  it('discards an older view response that finishes after the newest view', async () => {
+    let completeOlder
+    getMainlineGraph.mockImplementationOnce(() => new Promise(resolve => { completeOlder = resolve }))
+    const latest = { view_mode: 'overview', nodes: [{ id: 'new', type: 'person', name: '新视图' }], edges: [] }
+    getOverviewGraph.mockResolvedValueOnce(latest)
+    const data = useGraphData()
+
+    const older = data.loadMainlineGraph('old')
+    await data.loadOverviewGraph()
+    completeOlder({ view_mode: 'mainline', nodes: [{ id: 'old', type: 'person', name: '旧视图' }], edges: [] })
+    await older
+
+    expect(data.graph.value).toEqual(latest)
+    expect(data.isLoading.value).toBe(false)
+  })
+
+  it('keeps the last readable graph when a following request fails', async () => {
+    const readable = { view_mode: 'mainline', center_person_id: 'p1', nodes: [{ id: 'p1', type: 'person', name: '家人' }], edges: [] }
+    getMainlineGraph.mockResolvedValueOnce(readable)
+    getOverviewGraph.mockRejectedValueOnce(new Error('连接中断'))
+    const data = useGraphData()
+
+    await data.loadMainlineGraph('p1')
+    await data.loadOverviewGraph()
+
+    expect(data.graph.value).toEqual(readable)
+    expect(data.errorMessage.value).toBe('连接中断')
+    expect(data.isLoading.value).toBe(false)
+  })
+
+  it('ignores an outdated center context after a newer center was selected', async () => {
+    let completeOlder
+    getCenterContext.mockImplementationOnce(() => new Promise(resolve => { completeOlder = resolve }))
+    getCenterContext.mockResolvedValueOnce({ person: { id: 'new', name: '新的中心' } })
+    const data = useGraphData()
+
+    const older = data.loadCenterContext('old')
+    await data.loadCenterContext('new')
+    completeOlder({ person: { id: 'old', name: '旧的中心' } })
+    await older
+
+    expect(data.centerPersonId.value).toBe('new')
+    expect(data.centerContext.value.person.name).toBe('新的中心')
   })
 })

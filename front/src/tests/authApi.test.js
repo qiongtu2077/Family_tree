@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { apiClient } from '../api/http'
-import { getCurrentUser, initDemoUsers, login } from '../api/auth'
+import { approveRegistration, getCurrentUser, getPendingRequests, initDemoUsers, login, logout, rejectRegistration } from '../api/auth'
 
 vi.mock('../api/http', () => ({
   apiClient: {
@@ -30,9 +30,9 @@ describe('auth api', () => {
   it('checks current user session', async () => {
     apiClient.get.mockResolvedValue({ data: { success: true, user: { id: 1 } } })
 
-    await getCurrentUser(1)
+    await getCurrentUser()
 
-    expect(apiClient.get).toHaveBeenCalledWith('/auth/me', { params: { user_id: 1 } })
+    expect(apiClient.get).toHaveBeenCalledWith('/auth/me')
   })
 
   it('initializes demo users', async () => {
@@ -42,5 +42,22 @@ describe('auth api', () => {
 
     expect(apiClient.post).toHaveBeenCalledWith('/auth/init-demo-users')
     expect(result.success).toBe(true)
+  })
+
+  it('revokes the server session when logging out', async () => {
+    apiClient.post.mockResolvedValue({ data: { success: true } })
+    expect((await logout()).success).toBe(true)
+    expect(apiClient.post).toHaveBeenCalledWith('/auth/logout')
+  })
+
+  it('uses authenticated request IDs for application approval instead of email tokens', async () => {
+    apiClient.get.mockResolvedValue({ data: [{ id: 7, username: 'newcomer' }] })
+    apiClient.post.mockResolvedValue({ data: { success: true } })
+    expect(await getPendingRequests()).toEqual([{ id: 7, username: 'newcomer' }])
+    await approveRegistration(7)
+    await rejectRegistration(8)
+    expect(apiClient.get).toHaveBeenCalledWith('/auth/pending-requests')
+    expect(apiClient.post).toHaveBeenCalledWith('/auth/requests/7/approve')
+    expect(apiClient.post).toHaveBeenCalledWith('/auth/requests/8/reject')
   })
 })

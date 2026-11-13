@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..graph_schemas import GraphPerson, PersonCreateV2, PersonUpdateV2
 from ..database import get_db
 from ..repositories.person_repository import PersonRepository
+from ..security import require_admin, require_user
 
-router = APIRouter(prefix="/api/persons", tags=["PostgreSQL 人物"])
+router = APIRouter(prefix="/api/persons", tags=["PostgreSQL 人物"], dependencies=[Depends(require_user)])
 
 
 @router.get("", response_model=list[GraphPerson])
@@ -42,7 +43,7 @@ def get_person(person_id: str, session=Depends(get_db)):
     return _to_graph_person(person)
 
 
-@router.post("", response_model=GraphPerson, status_code=201)
+@router.post("", response_model=GraphPerson, status_code=201, dependencies=[Depends(require_admin)])
 def create_person(payload: PersonCreateV2, session=Depends(get_db)):
     """创建人物。"""
     repository = PersonRepository(session)
@@ -50,7 +51,7 @@ def create_person(payload: PersonCreateV2, session=Depends(get_db)):
     return _to_graph_person(person)
 
 
-@router.patch("/{person_id}", response_model=GraphPerson)
+@router.patch("/{person_id}", response_model=GraphPerson, dependencies=[Depends(require_admin)])
 def update_person(
     person_id: str,
     payload: PersonUpdateV2,
@@ -64,7 +65,7 @@ def update_person(
     return _to_graph_person(person)
 
 
-@router.delete("/{person_id}", status_code=204)
+@router.delete("/{person_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_person(person_id: str, session=Depends(get_db)):
     """删除人物。"""
     repository = PersonRepository(session)

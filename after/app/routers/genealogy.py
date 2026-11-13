@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import User
+from ..security import require_admin, require_user
 from ..repositories.person_repository import PersonRepository
 from ..schemas import FamilyTreeResponse, PersonCreate, PersonProfileUpdate, PersonResponse, PersonUpdate
 from ..services.family_tree import (
@@ -21,7 +22,7 @@ from ..services.family_tree import (
     serialize_person,
 )
 
-router = APIRouter(prefix="/api/genealogy", tags=["族谱"])
+router = APIRouter(prefix="/api/genealogy", tags=["族谱"], dependencies=[Depends(require_user)])
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
@@ -57,7 +58,7 @@ def get_person(person_id: str, db: Session = Depends(get_db)):
 @router.get("/persons/{person_id}/detail")
 def get_person_detail(
     person_id: str,
-    user_id: int | None = Query(None, description="当前登录用户 ID"),
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     """读取人物详情、所有父母事实、照片、年龄和资料编辑权限。"""
@@ -67,7 +68,6 @@ def get_person_detail(
         birth_date = date.fromisoformat(person["birth_date"])
         end_date = date.fromisoformat(person["death_date"]) if person["death_date"] else date.today()
         age = end_date.year - birth_date.year - ((end_date.month, end_date.day) < (birth_date.month, birth_date.day))
-    user = db.get(User, user_id) if user_id is not None else None
     return {
         **person,
         "age": age,
@@ -78,7 +78,7 @@ def get_person_detail(
 # --- 人物与个人资料写入 --- #
 
 
-@router.post("/persons", response_model=PersonResponse, status_code=201)
+@router.post("/persons", response_model=PersonResponse, status_code=201, dependencies=[Depends(require_admin)])
 def create_person(person: PersonCreate, db: Session = Depends(get_db)):
     """在统一人物表创建记录；父母关系交由正式关系接口维护。"""
     payload = person.model_dump()
@@ -87,7 +87,7 @@ def create_person(person: PersonCreate, db: Session = Depends(get_db)):
     return _serialize_people(db, [created])[0]
 
 
-@router.put("/persons/{person_id}", response_model=PersonResponse)
+@router.put("/persons/{person_id}", response_model=PersonResponse, dependencies=[Depends(require_admin)])
 def update_person(person_id: str, person_update: PersonUpdate, db: Session = Depends(get_db)):
     """更新统一人物资料，拒绝通过旧单值字段改写家庭关系。"""
     _get_person_or_404(db, person_id)
@@ -98,7 +98,7 @@ def update_person(person_id: str, person_update: PersonUpdate, db: Session = Dep
     return _serialize_people(db, [updated])[0]
 
 
-@router.delete("/persons/{person_id}", status_code=204)
+@router.delete("/persons/{person_id}", status_code=204, dependencies=[Depends(require_admin)])
 def delete_person(person_id: str, db: Session = Depends(get_db)):
     """删除统一人物及关联关系，上传文件保留在原目录。"""
     if not PersonRepository(db).delete_person(person_id):
@@ -110,12 +110,12 @@ def delete_person(person_id: str, db: Session = Depends(get_db)):
 def update_person_profile(
     person_id: str,
     profile: PersonProfileUpdate,
-    user_id: int = Query(..., description="当前登录用户 ID"),
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     """管理员或本人账号更新个人资料，显式 null 可清空可选字段。"""
     _get_person_or_404(db, person_id)
-    _require_edit_permission(db, person_id, user_id)
+    _require_edit_permission(user, person_id)
     updated = PersonRepository(db).update_person(person_id, profile.model_dump(exclude_unset=True))
     return {
         "success": True,
@@ -142,12 +142,12 @@ def get_family_tree(
 def upload_avatar(
     person_id: str,
     file: UploadFile = File(...),
-    user_id: int = Query(..., description="当前登录用户 ID"),
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     """保存 UUID 文件名的头像，并更新统一人物资料，保留旧文件。"""
     _get_person_or_404(db, person_id)
-    _require_edit_permission(db, person_id, user_id)
+    _require_edit_permission(user, person_id)
     avatar_url = _save_image(file, "avatars")
     PersonRepository(db).update_person(person_id, {"avatar": avatar_url})
     return {"success": True, "message": "头像上传成功", "avatar_url": avatar_url}
@@ -157,12 +157,12 @@ def upload_avatar(
 def upload_photo(
     person_id: str,
     file: UploadFile = File(...),
-    user_id: int = Query(..., description="当前登录用户 ID"),
+    user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     """保存照片，并把照片 URL 追加到统一人物资料的照片列表。"""
     person = _get_person_or_404(db, person_id)
-    _require_edit_permission(db, person_id, user_id)
+    _require_edit_permission(user, person_id)
     photo_url = _save_image(file, "photos")
     PersonRepository(db).update_person(person_id, {"photos": [*person.get("photos", []), photo_url]})
     return {"success": True, "message": "照片上传成功", "photo_url": photo_url}
@@ -212,10 +212,9 @@ def _validate_parent_fields(payload: dict[str, Any], links: list[dict[str, Any]]
             )
 
 
-def _require_edit_permission(db: Session, person_id: str, user_id: int) -> None:
-    """按旧客户端用户参数核验有效账号及管理员或本人资料权限。"""
-    user = db.get(User, user_id)
-    if user is None or not user.is_active:
+def _require_edit_permission(user: User, person_id: str) -> None:
+    """只按已认证的会话账号检查管理员或本人资料权限。"""
+    if not user.is_active:
         raise HTTPException(status_code=401, detail="用户不存在或账号已被禁用")
     if not user.is_admin and user.person_id != person_id:
         raise HTTPException(status_code=403, detail="没有权限编辑此人员资料")

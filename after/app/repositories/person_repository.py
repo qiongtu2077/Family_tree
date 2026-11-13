@@ -214,6 +214,7 @@ class PersonRepository:
         parent_id: str,
         child_id: str,
         properties: dict[str, Any],
+        source_family_id: str | None = None,
     ) -> bool:
         """新增或更新指定类型亲子事实，不覆盖同对人物的其他关系类型。"""
         parent_id, child_id = str(parent_id), str(child_id)
@@ -222,10 +223,11 @@ class PersonRepository:
         cleaned = _clean_properties(properties)
         kind = cleaned.pop("relationKind", "biological")
         relation = self.session.get(ParentChild, (parent_id, child_id, kind))
+        previous_properties = relation.properties if relation is not None else None
         if relation is None:
             relation = ParentChild(parent_id=parent_id, child_id=child_id, relation_kind=kind, properties={})
             self.session.add(relation)
-        relation.properties = {**relation.properties, **cleaned}
+        relation.properties = _relation_properties(previous_properties, cleaned, source_family_id)
         self.session.flush()
         return True
 
@@ -234,16 +236,18 @@ class PersonRepository:
         person_a_id: str,
         person_b_id: str,
         properties: dict[str, Any],
+        source_family_id: str | None = None,
     ) -> bool:
         """创建或更新唯一无向配偶关系。"""
         person_a_id, person_b_id = sorted((str(person_a_id), str(person_b_id)))
         if self.session.get(GenealogyPerson, person_a_id) is None or self.session.get(GenealogyPerson, person_b_id) is None:
             return False
         relation = self.session.get(Spouse, (person_a_id, person_b_id))
+        previous_properties = relation.properties if relation is not None else None
         if relation is None:
             relation = Spouse(person_a_id=person_a_id, person_b_id=person_b_id, properties={})
             self.session.add(relation)
-        relation.properties = {**relation.properties, **_clean_properties(properties)}
+        relation.properties = _relation_properties(previous_properties, _clean_properties(properties), source_family_id)
         self.session.flush()
         return True
 
@@ -262,7 +266,7 @@ class PersonRepository:
                 "startDate", "endDate", "displayOrder",
             ) if key in unit.properties}
             for left, right in combinations(partners, 2):
-                self.add_spouse_relation(left.person_id, right.person_id, spouse_properties)
+                self.add_spouse_relation(left.person_id, right.person_id, spouse_properties, source_family_id=family_unit_id)
         for child in children:
             for parent in partners:
                 # 关系类型沿用该子女成员记录，生育与收养以不同主键分别保存。
@@ -270,10 +274,24 @@ class PersonRepository:
                     "side": {"M": "father", "F": "mother"}.get(parent.gender, "parent"),
                     "relationKind": child.properties.get("relationKind", "biological"),
                     "certainty": child.properties.get("certainty", 1.0),
-                })
+                }, source_family_id=family_unit_id)
 
 
 # --- 属性规范化 --- #
+
+
+def _relation_properties(previous: dict | None, changed: dict, source_family_id: str | None) -> dict:
+    """记录明确家庭来源及独立事实；已有未标记历史事实始终按独立事实保留。"""
+    explicit = previous is not None and previous.get("_explicit", True)
+    # 家庭刷新只补来源，不能覆盖用户独立维护或历史保留的亲缘属性。
+    merged = dict(previous) if source_family_id is not None and explicit else {**(previous or {}), **changed}
+    if source_family_id is None:
+        merged["_explicit"] = True
+    else:
+        # 旧记录无法证明来自家庭：后续同步也不能将它改成可自动清除的派生事实。
+        merged["_explicit"] = explicit
+        merged["_family_sources"] = sorted(set((previous or {}).get("_family_sources", [])) | {source_family_id})
+    return merged
 
 
 def _clean_properties(payload: dict[str, Any], keep_nulls: bool = False) -> dict[str, Any]:

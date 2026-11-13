@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from .config import get_settings
 from .database import engine, Base
+from . import security  # 注册服务端会话模型，必须先于启动时 create_all。
 from .routers import admin, auth, family_units, genealogy, graph, persons, relationships
 
 """
@@ -43,7 +44,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[settings.server_url],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

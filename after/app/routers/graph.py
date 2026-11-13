@@ -9,8 +9,9 @@ from ..database import get_db
 from ..repositories.graph_repository import GraphRepository
 from ..services.graph_view_service import GraphViewService
 from ..services.relation_path_service import RelationPathService
+from ..security import require_admin, require_user
 
-router = APIRouter(prefix="/api/graph", tags=["PostgreSQL 图谱"])
+router = APIRouter(prefix="/api/graph", tags=["PostgreSQL 图谱"], dependencies=[Depends(require_user)])
 
 
 @router.get("/focus/{person_id}", response_model=GraphViewResponse)
@@ -156,7 +157,7 @@ def get_relation_path(
     return path
 
 
-@router.get("/issues", response_model=list[GraphIssue])
+@router.get("/issues", response_model=list[GraphIssue], dependencies=[Depends(require_admin)])
 def get_graph_issues(session=Depends(get_db)):
     """获取管理员图谱异常诊断列表。"""
     service = GraphViewService(GraphRepository(session))

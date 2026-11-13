@@ -112,7 +112,7 @@ describe('MC/DC graph data decisions', () => {
 
     expect(graph.nodes).toEqual([])
     expect(graph.center_person_id).toBe('p1')
-    expect(data.errorMessage.value).toBe('接口返回空图谱，请先初始化 Neo4j 测试数据')
+    expect(data.errorMessage.value).toBe('当前范围没有可展示人物，请选择其他人物或在资料管理中添加成员')
   })
 
   it('D-D6 extracts FastAPI detail before generic JavaScript error text', async () => {
