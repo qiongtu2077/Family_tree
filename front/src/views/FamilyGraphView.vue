@@ -7,26 +7,49 @@
       <section class="left-rail" aria-label="家谱浏览设置">
         <div class="status-card">
           <span class="eyebrow">家族档案 / 当前视图</span>
-          <strong>{{ currentViewLabel }}</strong>
+          <strong>{{ readingMode === 'paternal' ? '父系阅读图' : currentViewLabel }}</strong>
           <p>{{ currentViewHint }}</p>
           <div v-if="centerPersonName" class="observer"><span class="observer-avatar">{{ centerPersonName.slice(0, 1) }}</span><div><small>正在以此人为中心</small><b>{{ centerPersonName }}</b></div><button @click="openCenterModal">更换</button></div>
-          <div class="scope-summary"><span><b>{{ data.personNodes.value.length }}</b> 位人物</span><span v-if="data.graph.value.hidden_relation_count">{{ data.graph.value.hidden_relation_count }} 位位于旁支</span></div>
+          <div class="scope-summary"><span><b>{{ displayedPersonCount }}</b> 位人物</span><span v-if="displayGraph.hidden_relation_count">旁支范围约 {{ displayGraph.hidden_relation_count }} 位</span></div>
           <small class="context-hint">{{ currentContextHint }}</small>
         </div>
 
         <div v-if="data.errorMessage.value" class="error-card" role="alert"><span>{{ data.errorMessage.value }}</span><button aria-label="关闭错误提示" @click="data.errorMessage.value = ''">×</button></div>
 
         <div class="explore-card">
-          <h3>浏览范围</h3>
-          <div v-if="interactions.selectedView.value === 'mainline'" class="depth-controls">
+          <h3>阅读方式</h3>
+          <div class="reading-switch" role="group" aria-label="家谱关系范围">
+            <button type="button" :aria-pressed="readingMode === 'family'" :disabled="data.isLoading.value" @click="changeReadingMode('family')">完整家谱</button>
+            <button type="button" :aria-pressed="readingMode === 'paternal'" :disabled="data.isLoading.value" @click="changeReadingMode('paternal')">父系阅读</button>
+          </div>
+          <div class="reading-switch direction-switch" role="group" aria-label="世代阅读方向">
+            <button type="button" :aria-pressed="layoutDirection === 'vertical'" @click="changeDirection('vertical')">纵向 · 向下</button>
+            <button type="button" :aria-pressed="layoutDirection === 'horizontal'" @click="changeDirection('horizontal')">横向 · 向右</button>
+          </div>
+          <p v-if="readingMode === 'paternal'" class="reading-note">沿已确认生父关系追溯，保留配偶及全部直接子女。绿色边框为父系主干。</p>
+          <div v-if="readingMode === 'paternal'" class="depth-controls paternal-controls">
+            <label>父系上溯范围<select v-model.number="paternalAncestorDepth" @change="refreshView"><option v-for="depth in [1,2,3,4,5]" :key="depth" :value="depth">{{ depth }} 代</option></select></label>
+            <label>展开父系旁支<select v-model.number="paternalBranchDepth" @change="refreshView"><option v-for="depth in [0,1,2,3]" :key="depth" :value="depth">{{ depth ? depth + ' 层' : '只看近亲' }}</option></select></label>
+          </div>
+          <p v-if="displayGraph.paternal_context" class="reading-note">{{ displayGraph.paternal_context.core_person_ids.length }} 位主干人物 · {{ displayGraph.paternal_context.omitted_person_count }} 位暂收起。范围之外的祖先可增加上溯代数查看。</p>
+          <h3 v-if="readingMode === 'family'">浏览范围</h3>
+          <div v-if="interactions.selectedView.value === 'mainline' && readingMode === 'family'" class="depth-controls">
             <label>向上追溯<select v-model.number="ancestorDepth" @change="refreshView"><option v-for="depth in [1,2,3,4,5]" :key="depth" :value="depth">{{ depth }} 代祖先</option></select></label>
             <label>向下展开<select v-model.number="descendantDepth" @change="refreshView"><option v-for="depth in [1,2,3,4,5]" :key="depth" :value="depth">{{ depth }} 代后代</option></select></label>
           </div>
-          <label v-else-if="interactions.selectedView.value !== 'overview'" class="single-depth">展示代数<select v-model.number="branchDepth" @change="refreshView"><option v-for="depth in [1,2,3,4,5,6]" :key="depth" :value="depth">{{ depth }} 代</option></select></label>
-          <div v-else class="overview-scope"><p>{{ overviewScope === 'all' ? '浏览所有已录入家族及其连接。' : '只展示中心人物的亲缘范围。' }}</p><button v-if="overviewScope !== 'all'" @click="requestView('overview')">查看全部家族</button></div>
+          <label v-else-if="interactions.selectedView.value !== 'overview' && readingMode === 'family'" class="single-depth">展示代数<select v-model.number="branchDepth" @change="refreshView"><option v-for="depth in [1,2,3,4,5,6]" :key="depth" :value="depth">{{ depth }} 代</option></select></label>
+          <div v-else-if="interactions.selectedView.value === 'overview'" class="overview-scope"><p>{{ overviewScope === 'all' ? '浏览所有已录入家族及其连接。' : '只展示中心人物的亲缘范围。' }}</p><button v-if="overviewScope !== 'all'" @click="requestView('overview')">查看全部家族</button></div>
           <button v-if="spouseOptions.length" class="context-button" @click="openParameterModal('spouse', 'inlaw')">{{ selectedSpouseOption ? `配偶：${selectedSpouseOption.person.name}` : '选择配偶 / 伴侣' }}<span>↗</span></button>
           <button v-if="familyOptions.length" class="context-button" @click="openParameterModal('family', 'branch')">选择家庭分支<span>↗</span></button>
           <div class="navigation-actions"><button :disabled="centerHistory.length < 2" @click="goBackCenter">← 上一位</button><button :disabled="data.isLoading.value" @click="refreshView">刷新家谱</button></div>
+        </div>
+
+        <div v-if="overviewInfo" class="explore-card branch-browser">
+          <h3>家族支系 · {{ overviewInfo.branches.length }}</h3>
+          <p class="reading-note">按真实生养家庭归组，每位人物只归属一支。跨支关系保留连接，点击摘要可展开。</p>
+          <div class="reading-switch" role="group" aria-label="全景支系展开范围"><button type="button" :aria-pressed="overviewInfo.expandedBranchIds.length === 0" @click="collapseAllBranches">收起全部</button><button type="button" :aria-pressed="overviewInfo.branches.length > 0 && overviewInfo.expandedBranchIds.length === overviewInfo.branches.length" @click="expandAllBranches">展开全部</button></div>
+          <p class="branch-count">已展开 {{ overviewInfo.visiblePersonCount }} 位 · 收起 {{ overviewInfo.collapsedPersonCount }} 位</p>
+          <div class="branch-options" aria-label="家族支系列表"><button v-for="branch in overviewInfo.branches" :key="branch.id" type="button" :data-branch-id="branch.id" :aria-expanded="overviewInfo.expandedBranchIds.includes(branch.id)" @click="toggleOverviewBranch(branch.id)"><strong>{{ branch.title }}</strong><span>{{ branch.personCount }} 位 · {{ overviewInfo.expandedBranchIds.includes(branch.id) ? '收起' : '展开' }}</span></button></div>
         </div>
 
         <div v-if="searchHasRun" class="search-results">
@@ -34,11 +57,11 @@
           <p v-if="!interactions.searchResults.value.length">没有匹配人物，请尝试其他姓名。</p>
           <button v-for="person in interactions.searchResults.value" :key="person.id" @click="focusPerson(person.id)"><span>{{ person.name }}</span><small>{{ person.birth_date?.slice(0, 4) || '年份未知' }} →</small></button>
         </div>
-        <div v-if="data.graph.value.warnings.length" class="warning-card"><h3>视图提示</h3><p v-for="warning in data.graph.value.warnings" :key="warning">{{ warning }}</p></div>
+        <div v-if="displayGraph.warnings.length" class="warning-card"><h3>视图提示</h3><p v-for="warning in displayGraph.warnings" :key="warning">{{ warning }}</p></div>
         <p class="archive-note">一代一代的名字，<br />连成属于我们的来处。</p>
       </section>
 
-      <FamilyGraphCanvas ref="canvasRef" class="canvas-area" :graph="data.graph.value" :is-loading="data.isLoading.value" :center-person-id="data.centerPersonId.value" :selected-person-id="interactions.selectedPersonId.value" @select-person="selectPerson" @select-capsule="handleCapsuleClick" />
+      <FamilyGraphCanvas ref="canvasRef" class="canvas-area" :graph="displayGraph" :direction="layoutDirection" :is-loading="data.isLoading.value" :center-person-id="data.centerPersonId.value" :selected-person-id="interactions.selectedPersonId.value" @select-person="selectPerson" @select-capsule="handleCapsuleClick" @toggle-branch="toggleOverviewBranch" />
       <PersonDetailDrawer :person="interactions.selectedPerson.value" @close="interactions.clearSelection" @focus="focusPerson" @open-relation="openRelationPanel" @edit="editPersonProfile" />
     </main>
 
@@ -67,6 +90,8 @@ import RelationPathPanel from '../components/graph/RelationPathPanel.vue'
 import { useGraphData } from '../composables/useGraphData'
 import { useGraphInteractions } from '../composables/useGraphInteractions'
 import { getPersonDetail } from '../api/genealogy'
+import { projectOverviewBranches } from '../graph/overviewBranches'
+import { createPaternalProjection } from '../graph/paternalProjection'
 
 const props = defineProps({ currentUser: { type: Object, default: null }, isAdmin: { type: Boolean, default: false } })
 defineEmits(['logout'])
@@ -77,6 +102,13 @@ const ancestorDepth = ref(2)
 const descendantDepth = ref(2)
 const branchDepth = ref(3)
 const overviewScope = ref('all')
+const readingMode = ref('family')
+const layoutDirection = ref(localStorage.getItem('familytree:layoutDirection') === 'horizontal' ? 'horizontal' : 'vertical')
+const paternalAncestorDepth = ref(5)
+const paternalBranchDepth = ref(0)
+const depthSettings = [ancestorDepth, descendantDepth, branchDepth, paternalAncestorDepth, paternalBranchDepth]
+let appliedDepths = depthSettings.map(setting => setting.value)
+const expandedBranches = ref([])
 const manageOpen = ref(false)
 const requestsOpen = ref(false)
 const profileOpen = ref(false)
@@ -97,6 +129,7 @@ let viewRequest = 0
 let centerRequest = 0
 let searchRequest = 0
 let personRequest = 0
+let hasOpenedPaternal = false
 
 const labels = { mainline: '本家主线图', inlaw: '姻亲谱系图', bridge: '联姻桥接图', branch: '后代分支图', overview: '家族全景图' }
 const hints = {
@@ -107,11 +140,23 @@ const hints = {
   overview: '在完整家族中寻找支系、人物与彼此的连接。'
 }
 const currentViewLabel = computed(() => labels[interactions.selectedView.value])
-const currentViewHint = computed(() => hints[interactions.selectedView.value])
+const currentViewHint = computed(() => readingMode.value === 'paternal' ? '沿明确记录的生父关系寻根，同时保留配偶、子女与旁支入口。' : hints[interactions.selectedView.value])
 const centerPersonName = computed(() => data.centerContext.value?.person.name || '')
 const spouseOptions = computed(() => data.centerContext.value?.available_spouses || [])
 const familyOptions = computed(() => data.centerContext.value?.available_family_units || [])
 const parameterOptions = computed(() => parameterMode.value === 'family' ? familyOptions.value : spouseOptions.value)
+const displayGraph = computed(() => {
+  const graph = data.graph.value
+  if (data.isLoading.value) return graph
+  if (graph.view_mode === 'overview') return projectOverviewBranches(graph, expandedBranches.value)
+  if (readingMode.value === 'paternal' && graph.view_mode === 'mainline' && graph.nodes.some(node => node.id === data.centerPersonId.value)) {
+    return createPaternalProjection(graph, data.centerPersonId.value, { sideBranchDepth: paternalBranchDepth.value, maxAncestorDepth: paternalAncestorDepth.value })
+  }
+  return graph
+})
+const overviewInfo = computed(() => displayGraph.value.overview_branches || null)
+// 聚合图报告总人数，父系切片报告当前实际展示的人数。
+const displayedPersonCount = computed(() => overviewInfo.value?.totalPersonCount ?? displayGraph.value.nodes.filter(node => node.type === 'person').length)
 const selectedParameterId = computed(() => parameterMode.value === 'family' ? selectedParameterOption.value?.family_unit_id || '' : selectedParameterOption.value?.person.id || '')
 const currentContextHint = computed(() => {
   if (interactions.selectedView.value === 'overview') return overviewScope.value === 'all' ? '完整家族关系' : '中心人物亲缘范围'
@@ -120,6 +165,41 @@ const currentContextHint = computed(() => {
 })
 
 // --- 搜索与中心人物 --- //
+
+/** 将关系范围与世代方向分开；父系首次进入时使用纵向阅读。 */
+async function changeReadingMode(mode) {
+  if (mode === readingMode.value) return
+  const previous = readingMode.value
+  const previousDirection = layoutDirection.value
+  const hadOpenedPaternal = hasOpenedPaternal
+  const request = viewRequest + 1
+  readingMode.value = mode
+  if (mode === 'paternal' && !hasOpenedPaternal) { changeDirection('vertical'); hasOpenedPaternal = true }
+  const loaded = await requestView('mainline')
+  if (!loaded && request === viewRequest && !centerModalOpen.value) {
+    readingMode.value = previous
+    hasOpenedPaternal = hadOpenedPaternal
+    changeDirection(previousDirection)
+  }
+}
+
+/** 保存阅读方向，横向布局仍保持姓名正向。 */
+function changeDirection(direction) {
+  layoutDirection.value = direction
+  localStorage.setItem('familytree:layoutDirection', direction)
+}
+
+/** 每次都由原始全景投影展开或收起一个支系，不重复聚合已投影的数据。 */
+function toggleOverviewBranch(branchId) {
+  expandedBranches.value = expandedBranches.value.includes(branchId) ? expandedBranches.value.filter(id => id !== branchId) : [...expandedBranches.value, branchId]
+  interactions.clearSelection()
+}
+
+/** 一次展开当前范围内所有人物及原始关系。 */
+function expandAllBranches() { expandedBranches.value = overviewInfo.value.branches.map(branch => branch.id); interactions.clearSelection() }
+
+/** 回到支系摘要地图，人物和家庭事实仍保存在原始图谱中。 */
+function collapseAllBranches() { expandedBranches.value = []; interactions.clearSelection() }
 
 /** 搜索人物并只保留最新关键词的结果。 */
 async function handleSearch() {
@@ -162,6 +242,9 @@ async function applyCenterPerson(personId, targetView = 'mainline', recordHistor
   const request = ++centerRequest
   const previousContext = data.centerContext.value
   const previousId = data.centerPersonId.value
+  const previousSpouse = selectedSpouseOption.value
+  const previousFamily = selectedFamilyOption.value
+  const previousParameter = selectedParameterOption.value
   const context = await data.loadCenterContext(personId)
   if (request !== centerRequest) return false
   if (!context) {
@@ -173,11 +256,15 @@ async function applyCenterPerson(personId, targetView = 'mainline', recordHistor
   selectedFamilyOption.value = null
   selectedParameterOption.value = null
   interactions.clearSelection()
+  const targetRequest = viewRequest + 1
   const loaded = await requestView(targetView)
-  if (request !== centerRequest) return false
+  if (request !== centerRequest || targetRequest !== viewRequest) return false
   if (!loaded && !parameterModalOpen.value) {
     data.centerContext.value = previousContext
     data.centerPersonId.value = previousId
+    selectedSpouseOption.value = previousSpouse
+    selectedFamilyOption.value = previousFamily
+    selectedParameterOption.value = previousParameter
     return false
   }
   localStorage.setItem('familytree:centerPersonId', personId)
@@ -215,12 +302,17 @@ async function requestView(view) {
     else if (familyOptions.value.length > 1) { openParameterModal('family', view); return false }
   }
   let graph = null
-  if (view === 'mainline') graph = await data.loadMainlineGraph(centerId, ancestorDepth.value, descendantDepth.value)
+  if (view === 'mainline') graph = readingMode.value === 'paternal'
+    ? await data.loadPaternalGraph(centerId, paternalAncestorDepth.value, paternalBranchDepth.value)
+    : await data.loadMainlineGraph(centerId, ancestorDepth.value, descendantDepth.value)
   else if (view === 'inlaw') graph = await data.loadInlawGraph(centerId, selectedSpouseOption.value.person.id, branchDepth.value)
   else if (view === 'bridge') graph = await data.loadBridgeGraph(centerId, selectedSpouseOption.value.person.id, Math.min(branchDepth.value, 6), selectedSpouseOption.value.family_unit_id)
   else if (view === 'branch') graph = await data.loadBranchGraph(selectedFamilyOption.value ? 'familyUnit' : 'person', selectedFamilyOption.value?.family_unit_id || centerId, branchDepth.value)
-  else if (view === 'overview') { overviewScope.value = 'all'; graph = await data.loadOverviewGraph('all', 1000) }
+  else if (view === 'overview') graph = await data.loadOverviewGraph('all', 1000)
   if (request !== viewRequest || !graph || data.errorMessage.value) return false
+  if (view === 'overview') overviewScope.value = 'all'
+  if (view !== 'mainline') readingMode.value = 'family'
+  appliedDepths = depthSettings.map(setting => setting.value)
   interactions.selectedView.value = view
   interactions.clearSelection()
   return true
@@ -228,8 +320,13 @@ async function requestView(view) {
 
 /** 在当前视图重新读取数据，保留已选的配偶及家庭参数。 */
 async function refreshView() {
-  if (interactions.selectedView.value === 'overview' && overviewScope.value !== 'all') await showCenterScope()
-  else await requestView(interactions.selectedView.value)
+  const request = viewRequest + 1
+  const loaded = interactions.selectedView.value === 'overview' && overviewScope.value !== 'all'
+    ? await showCenterScope()
+    : await requestView(interactions.selectedView.value)
+  // 选择器先由 v-model 更新；读取失败时恢复已实际载入的范围，避免用新范围切旧源图。
+  if (!loaded && request === viewRequest) depthSettings.forEach((setting, index) => { setting.value = appliedDepths[index] })
+  return loaded
 }
 
 /** 按业务类型展示配偶或家庭选择器。 */
@@ -243,35 +340,62 @@ function openParameterModal(mode, view) {
 /** 应用已选参数并加载目标视图。 */
 async function confirmParameterSelection() {
   if (!selectedParameterOption.value) return
+  const previousSpouse = selectedSpouseOption.value
+  const previousFamily = selectedFamilyOption.value
+  const request = viewRequest + 1
   if (parameterMode.value === 'spouse') selectedSpouseOption.value = selectedParameterOption.value
   else selectedFamilyOption.value = selectedParameterOption.value
   parameterModalOpen.value = false
-  await requestView(pendingView.value)
+  const loaded = await requestView(pendingView.value)
+  if (!loaded && request === viewRequest) {
+    selectedSpouseOption.value = previousSpouse
+    selectedFamilyOption.value = previousFamily
+  }
 }
 
 /** 在全景中展示中心人物的亲缘范围。 */
 async function showCenterScope() {
-  if (!data.centerPersonId.value) { openCenterModal(); return }
+  if (!data.centerPersonId.value) { openCenterModal(); return false }
   const request = ++viewRequest
   const scope = `center:${data.centerPersonId.value}`
   const graph = await data.loadOverviewGraph(scope, 1000)
-  if (request !== viewRequest || !graph || data.errorMessage.value) return
+  if (request !== viewRequest || !graph || data.errorMessage.value) return false
   overviewScope.value = scope
+  readingMode.value = 'family'
   interactions.selectedView.value = 'overview'
   interactions.clearSelection()
+  return true
 }
 
 /** 按后端已定义的折叠入口继续探索对应分支。 */
 async function handleCapsuleClick(capsule) {
+  const previousMode = readingMode.value
+  const previousSpouse = selectedSpouseOption.value
+  const previousFamily = selectedFamilyOption.value
+  const request = viewRequest + 1
+  readingMode.value = 'family'
+  let loaded = false
   if (capsule.target_view === 'branch' && capsule.root_family_unit_id) {
     selectedFamilyOption.value = { family_unit_id: capsule.root_family_unit_id }
-    await requestView('branch')
+    loaded = await requestView('branch')
   } else if (capsule.target_view === 'inlaw' && capsule.owner_person_id) {
-    selectedSpouseOption.value = spouseOptions.value.find(option => option.person.id === capsule.owner_person_id) || { person: { id: capsule.owner_person_id, name: capsule.preview_names[0] || '配偶' } }
-    await requestView('inlaw')
-  } else if (capsule.target_view === 'mainline' && capsule.owner_person_id) await applyCenterPerson(capsule.owner_person_id)
-  else if (capsule.target_view === 'overview') await showCenterScope()
+    const spouse = spouseOptions.value.find(option => option.person.id === capsule.owner_person_id)
+    if (spouse) {
+      selectedSpouseOption.value = spouse
+      loaded = await requestView('inlaw')
+    } else if (capsule.root_family_unit_id) {
+      // 祖先或子女的配偶并非中心人物的配偶；按胶囊明确给定的原生家庭浏览。
+      selectedFamilyOption.value = { family_unit_id: capsule.root_family_unit_id }
+      loaded = await requestView('branch')
+    } else data.errorMessage.value = '该原生家庭缺少可浏览的家庭入口。'
+  } else if (capsule.target_view === 'mainline' && capsule.owner_person_id) loaded = await applyCenterPerson(capsule.owner_person_id)
+  else if (capsule.target_view === 'overview') loaded = await showCenterScope()
   else data.errorMessage.value = '该分支缺少可浏览的目标人物或家庭。'
+  if (!loaded && viewRequest <= request) {
+    readingMode.value = previousMode
+    selectedSpouseOption.value = previousSpouse
+    selectedFamilyOption.value = previousFamily
+  }
 }
 
 // --- 工具面板与资料刷新 --- //
@@ -358,6 +482,19 @@ onMounted(async () => {
 .scope-summary b { font-size: 18px; font-weight: 500; color: var(--ink); margin-right: 3px; }
 .context-hint { display: block; margin-top: 9px; font-size: 10px; color: #879488; line-height: 1.6; }
 .explore-card { padding: 16px; background: #ffffffae; border: 1px solid var(--line); border-radius: 12px; }
+.reading-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: #f5f7f1; margin: 0 0 12px; }
+.reading-switch button { min-width: 0; padding: 8px 3px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font: inherit; font-size: 11px; cursor: pointer; }
+.reading-switch button[aria-pressed="true"] { color: #fff; background: var(--green); }
+.reading-switch button:disabled { opacity: .5; cursor: wait; }
+.reading-note { margin: 0 0 12px; color: var(--muted); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.paternal-controls { margin-bottom: 12px; }
+.branch-browser { flex-shrink: 0; }
+.branch-count { margin: 0 0 10px; color: var(--muted); font-size: 11px; }
+.branch-options { display: grid; gap: 5px; max-height: 280px; overflow-y: auto; }
+.branch-options button { display: grid; gap: 5px; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: #fff; text-align: left; cursor: pointer; }
+.branch-options button[aria-expanded="true"] { border-color: var(--green); background: var(--green-soft); }
+.branch-options strong { font-size: 11px; font-weight: 550; overflow-wrap: anywhere; }
+.branch-options span { color: var(--muted); font-size: 10px; }
 h3 { margin: 0 0 14px; font-size: 12px; font-weight: 600; color: var(--ink); }
 .depth-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 label { display: grid; gap: 7px; color: var(--muted); font-size: 10px; }
@@ -397,6 +534,8 @@ select { min-width: 0; width: 100%; padding: 8px 3px; font-size: 11px; border: 1
   .explore-card h3 { margin-bottom: 8px; }
   .context-button { margin-top: 7px; padding-block: 7px; }
   .search-results, .warning-card, .error-card { grid-column: 1 / -1; }
+  .branch-browser { grid-column: 1 / -1; }
+  .branch-options { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 160px; }
   .search-results { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .section-heading, .search-results > p { grid-column: 1 / -1; }
 }

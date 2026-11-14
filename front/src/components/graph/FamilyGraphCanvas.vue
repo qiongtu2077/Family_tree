@@ -1,6 +1,12 @@
 <template>
   <section class="graph-canvas-shell" aria-label="家谱画布" tabindex="0" @keydown="handleKeydown">
     <div ref="containerRef" class="graph-canvas"></div>
+    <svg class="crossing-layer" aria-hidden="true">
+      <g v-for="mark in crossingMarks" :key="mark.id">
+        <line :x1="mark.x - mark.underX * mark.gap" :y1="mark.y - mark.underY * mark.gap" :x2="mark.x + mark.underX * mark.gap" :y2="mark.y + mark.underY * mark.gap" stroke="#fbfcf9" :stroke-width="mark.lineWidth + 4" />
+        <line :x1="mark.x - mark.overX * (mark.gap + 2)" :y1="mark.y - mark.overY * (mark.gap + 2)" :x2="mark.x + mark.overX * (mark.gap + 2)" :y2="mark.y + mark.overY * (mark.gap + 2)" :stroke="mark.stroke" :stroke-width="mark.lineWidth" :stroke-dasharray="mark.lineDash" />
+      </g>
+    </svg>
     <div class="canvas-heading"><span class="canvas-label">FAMILY CONNECTIONS</span><span>{{ personCount }} 位家人 · {{ graph.view_mode === 'overview' ? '家族全景' : '世代关系' }}</span></div>
     <div class="canvas-tools" aria-label="图谱缩放工具">
       <button aria-label="缩小图谱" :disabled="!personCount" @click="zoomBy(1 / 1.2)">−</button>
@@ -11,7 +17,7 @@
     <div v-if="isLoading || isLayingOut" class="canvas-state" role="status"><span class="loading-orbit"></span><strong>{{ isLoading ? '正在读取家族档案' : '正在整理家族脉络' }}</strong><span>让每一段关系，都有清晰的位置。</span></div>
     <div v-else-if="renderError" class="canvas-state" role="alert"><strong>暂时无法绘制家谱</strong><span>{{ renderError }}</span><button @click="renderGraph">重新绘制</button></div>
     <div v-else-if="!personCount" class="canvas-state empty-state"><span class="empty-tree" aria-hidden="true">谱</span><strong>从一位家人，开始探索</strong><span>选择中心人物，查看祖先、后代与家族之间的连接。</span></div>
-    <div v-if="personCount && !isLoading" class="canvas-footnote"><span class="legend-line"></span>亲子关系<span class="legend-line spouse"></span>配偶 / 伴侣<span class="legend-line adoptive"></span>收养 / 继亲<span class="interaction-hint">拖动平移 · 滚轮缩放 · 点击人物查看详情</span></div>
+    <div v-if="personCount && !isLoading" class="canvas-footnote"><span class="legend-line"></span>亲子关系<span class="legend-line spouse"></span>配偶 / 伴侣<span class="legend-line adoptive"></span>收养 / 继亲<span v-if="lastLayoutData.crossings?.length" class="crossing-legend">十字断口 · 两线不相连</span><span class="interaction-hint">拖动平移 · 滚轮缩放 · 点击人物查看详情</span></div>
     <button v-if="miniPeople.length > 8 && !isLoading" class="minimap-toggle" :aria-expanded="minimapOpen" @click="minimapOpen = !minimapOpen">{{ minimapOpen ? '收起导航' : '全图导航' }}</button>
     <div v-if="miniPeople.length > 8 && !isLoading && minimapOpen" class="minimap"><span>点击缩略图定位</span>
       <svg :viewBox="miniViewBox" preserveAspectRatio="none" role="img" aria-label="家谱缩略图，点击可定位" @pointerdown="navigateMiniMap">
@@ -33,9 +39,10 @@ const props = defineProps({
   graph: { type: Object, required: true },
   isLoading: { type: Boolean, default: false },
   centerPersonId: { type: String, default: null },
-  selectedPersonId: { type: String, default: null }
+  selectedPersonId: { type: String, default: null },
+  direction: { type: String, default: 'vertical' }
 })
-const emit = defineEmits(['selectPerson', 'selectCapsule'])
+const emit = defineEmits(['selectPerson', 'selectCapsule', 'toggleBranch'])
 const containerRef = ref(null)
 const isLayingOut = ref(false)
 const renderError = ref('')
@@ -44,8 +51,8 @@ const compactLabels = ref(false)
 const minimapOpen = ref(false)
 const lastLayoutData = shallowRef({ nodes: [], edges: [] })
 const viewportBox = ref({ x: 0, y: 0, width: 1, height: 1 })
-const personCount = computed(() => props.graph.nodes.filter(node => node.type === 'person').length)
-const miniPeople = computed(() => lastLayoutData.value.nodes.filter(node => node.nodeType === 'person'))
+const personCount = computed(() => props.graph.overview_branches?.totalPersonCount ?? props.graph.nodes.filter(node => node.type === 'person').length)
+const miniPeople = computed(() => lastLayoutData.value.nodes.filter(node => ['person', 'branchSummary'].includes(node.nodeType)))
 const miniBounds = computed(() => {
   const nodes = miniPeople.value
   if (!nodes.length) return { x: 0, y: 0, width: 1, height: 1 }
@@ -75,6 +82,30 @@ let hoveredNodeId = null
 let labelMode = null
 let layoutWorker = null
 let cancelLayout = null
+
+/** 根据当前真实视口绘制交叉断口；语义关系仍完整保存，不伪造连接结点。 */
+const crossingMarks = computed(() => {
+  // 实例尚未建立时也订阅视口，确保首次空结果会在初始化、缩放和平移后重算。
+  const viewport = viewportBox.value
+  if (!graphInstance || zoomPercent.value < 40) return []
+  const nodes = new Map(lastLayoutData.value.nodes.map(node => [node.id, node]))
+  const edges = new Map(lastLayoutData.value.edges.map(edge => [edge.id, edge]))
+  const zoom = graphInstance.getZoom()
+  // 仅为当前视口附近的交叉生成 SVG，密集图不创建成千上万个屏外断口。
+  const margin = 12 / zoom
+  return (lastLayoutData.value.crossings || []).filter(crossing => crossing.x >= viewport.x - margin && crossing.x <= viewport.x + viewport.width + margin && crossing.y >= viewport.y - margin && crossing.y <= viewport.y + viewport.height + margin).map(crossing => {
+    const over = edges.get(crossing.overEdgeId)
+    const under = edges.get(crossing.underEdgeId)
+    const aboveStart = nodes.get(over.source)
+    const aboveEnd = nodes.get(over.target)
+    const belowStart = nodes.get(under.source)
+    const belowEnd = nodes.get(under.target)
+    const point = graphInstance.getCanvasByPoint(crossing.x, crossing.y)
+    const overHorizontal = Math.abs(aboveStart.y - aboveEnd.y) < .01
+    const underHorizontal = Math.abs(belowStart.y - belowEnd.y) < .01
+    return { id: crossing.id, ...point, overX: overHorizontal ? 1 : 0, overY: overHorizontal ? 0 : 1, underX: underHorizontal ? 1 : 0, underY: underHorizontal ? 0 : 1, gap: Math.max(3, Math.min(7, crossing.gap * zoom / 2)), stroke: over.style.stroke, lineWidth: Math.max(.7, over.style.lineWidth * zoom), lineDash: over.style.lineDash?.map(length => length * zoom).join(' ') }
+  })
+})
 
 // --- 实例与绘制 --- //
 
@@ -116,6 +147,7 @@ function bindGraphEvents() {
     const model = event.item.getModel()
     if (model.nodeType === 'person') { emit('selectPerson', model.raw); selectNode(model.id) }
     else if (model.nodeType === 'branchCapsule') emit('selectCapsule', model.raw)
+    else if (model.nodeType === 'branchSummary') emit('toggleBranch', model.id)
   })
   graphInstance.on('node:mouseenter', event => {
     if (event.item.getModel().nodeType !== 'person') return
@@ -148,7 +180,7 @@ async function renderGraph() {
     const instance = await ensureGraph()
     if (!instance || disposed || version !== renderVersion) return
     const context = props.graph.view_context || {}
-    const key = [props.graph.view_mode, props.centerPersonId, context.spouse_id, context.root_id, context.family_unit_id].join(':')
+    const key = [props.graph.view_mode, props.centerPersonId, context.spouse_id, context.root_id, context.family_unit_id, context.projection_reason, props.graph.paternal_context?.ancestor_depth, props.graph.paternal_context?.side_branch_depth, props.direction, props.graph.overview_branches?.expandedBranchIds.join('|')].join(':')
     const anchorId = props.selectedPersonId || props.centerPersonId
     const oldAnchor = lastLayoutData.value.nodes.find(node => node.id === anchorId)
     const anchorPoint = oldAnchor ? instance.getCanvasByPoint(oldAnchor.x, oldAnchor.y) : null
@@ -179,7 +211,8 @@ async function renderGraph() {
 
 /** 把大图计算移到 Worker；切图和卸载立即结束旧任务。 */
 async function calculateLayout(id) {
-  if (props.graph.nodes.length <= 80) return layoutGraph(props.graph)
+  const options = { direction: props.direction }
+  if (props.graph.nodes.length <= 80) return layoutGraph(props.graph, options)
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('../../graph/layout.worker.js', import.meta.url), { type: 'module' })
     layoutWorker = worker
@@ -195,7 +228,7 @@ async function calculateLayout(id) {
       else resolve(event.data.layout)
     }
     worker.onerror = event => { finish(); reject(new Error(event.message || '家谱布局计算失败')) }
-    worker.postMessage({ id, graph: JSON.parse(JSON.stringify(props.graph)) })
+    worker.postMessage({ id, graph: JSON.parse(JSON.stringify(props.graph)), options })
   })
 }
 
@@ -220,7 +253,17 @@ function resizeGraph() {
 /** 按当前容器缩放至全图，只有明确导航时才调用。 */
 function fitGraph() {
   if (!graphInstance || !lastLayoutData.value.nodes.length) return
-  graphInstance.fitView(containerRef.value.clientWidth < 600 ? [70, 28, 90, 28] : [80, 56, 90, 56])
+  const padding = containerRef.value.clientWidth < 600 ? [70, 28, 90, 28] : [80, 56, 90, 56]
+  const bounds = lastLayoutData.value.nodes.map(node => {
+    const size = Array.isArray(node.size) ? node.size : [node.size, node.size]
+    return { left: node.x - size[0] / 2, right: node.x + size[0] / 2, top: node.y - size[1] / 2, bottom: node.y + size[1] / 2 }
+  })
+  const width = Math.max(...bounds.map(box => box.right)) - Math.min(...bounds.map(box => box.left))
+  const height = Math.max(...bounds.map(box => box.bottom)) - Math.min(...bounds.map(box => box.top))
+  // 密集关系会增加代际留白；下限随全图边界调整，保证“适应视图”能够包含全图。
+  const fitRatio = Math.min((containerRef.value.clientWidth - padding[1] - padding[3]) / Math.max(width, 1), (containerRef.value.clientHeight - padding[0] - padding[2]) / Math.max(height, 1))
+  graphInstance.setMinZoom(Math.min(0.08, Math.max(Number.EPSILON, fitRatio * .9)))
+  graphInstance.fitView(padding)
   if (graphInstance.getZoom() > 1.15) setZoom(1.15)
   updateViewport()
 }
@@ -228,7 +271,7 @@ function fitGraph() {
 /** 以画布中心为锚点设置有限的缩放比例。 */
 function setZoom(ratio) {
   if (!graphInstance) return
-  graphInstance.zoomTo(Math.max(0.08, Math.min(2.5, ratio)), { x: graphInstance.get('width') / 2, y: graphInstance.get('height') / 2 })
+  graphInstance.zoomTo(Math.max(graphInstance.getMinZoom(), Math.min(2.5, ratio)), { x: graphInstance.get('width') / 2, y: graphInstance.get('height') / 2 })
   updateViewport()
 }
 
@@ -238,7 +281,8 @@ function zoomBy(factor) { if (graphInstance) setZoom(graphInstance.getZoom() * f
 /** 回到中心人物；若当前切片没有中心人物则适应当前图。 */
 function focusCenter() {
   if (!graphInstance) return
-  const item = graphInstance.findById(props.centerPersonId)
+  const summary = lastLayoutData.value.nodes.find(node => node.nodeType === 'branchSummary' && node.raw.personIds.includes(props.centerPersonId))
+  const item = graphInstance.findById(summary?.id || props.centerPersonId)
   if (!item) { fitGraph(); return }
   setZoom(0.95)
   graphInstance.focusItem(item, false)
@@ -312,7 +356,7 @@ function exposeGraphDebugState() {
   window.__familyTreeGraphDebug = {
     getLayout: () => lastLayoutData.value,
     getCapsules: () => lastLayoutData.value.nodes.filter(node => node.nodeType === 'branchCapsule'),
-    getState: () => ({ isAnimating: isLayingOut.value, viewMode: props.graph.view_mode || '', rawNodeCount: props.graph.nodes.length, rawEdgeCount: props.graph.edges.length, layoutNodeCount: lastLayoutData.value.nodes.length, layoutEdgeCount: lastLayoutData.value.edges.length, capsuleCount: lastLayoutData.value.nodes.filter(node => node.nodeType === 'branchCapsule').length, zoom: zoomPercent.value, canvasCount: containerRef.value?.querySelectorAll('canvas').length || 0 }),
+    getState: () => ({ isAnimating: isLayingOut.value, viewMode: props.graph.view_mode || '', direction: props.direction, rawNodeCount: props.graph.nodes.length, rawEdgeCount: props.graph.edges.length, layoutNodeCount: lastLayoutData.value.nodes.length, layoutEdgeCount: lastLayoutData.value.edges.length, crossingCount: lastLayoutData.value.crossings?.length || 0, summaryCount: lastLayoutData.value.nodes.filter(node => node.nodeType === 'branchSummary').length, totalPersonCount: personCount.value, capsuleCount: lastLayoutData.value.nodes.filter(node => node.nodeType === 'branchCapsule').length, zoom: zoomPercent.value, canvasCount: containerRef.value?.querySelectorAll('canvas').length || 0 }),
     getViewportPoint: nodeId => {
       const node = lastLayoutData.value.nodes.find(item => item.id === nodeId)
       if (!graphInstance || !node) return null
@@ -323,7 +367,7 @@ function exposeGraphDebugState() {
   }
 }
 
-watch(() => [props.graph, props.isLoading], renderGraph, { flush: 'post' })
+watch(() => [props.graph, props.isLoading, props.direction], renderGraph, { flush: 'post' })
 watch(() => props.selectedPersonId, selectNode)
 onMounted(renderGraph)
 onBeforeUnmount(() => {
@@ -343,6 +387,8 @@ defineExpose({ fitGraph, focusCenter })
 .graph-canvas-shell:focus-visible { outline: 2px solid var(--green, #2d6a54); outline-offset: -3px; }
 .graph-canvas { position: absolute; inset: 0; background-image: radial-gradient(#d9e2d8 .8px, transparent .8px); background-size: 22px 22px; }
 .graph-canvas :deep(canvas) { display: block; }
+.crossing-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
+.crossing-legend { margin-left: 8px; }
 .canvas-heading { position: absolute; left: 24px; top: 22px; display: grid; gap: 5px; color: var(--muted, #6e7b73); font-size: 12px; pointer-events: none; }
 .canvas-label { letter-spacing: 2px; font-size: 10px; font-weight: 600; color: #8c9c90; }
 .canvas-tools { position: absolute; z-index: 2; bottom: 48px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; padding: 5px; background: #fff; border: 1px solid #dfe5de; border-radius: 12px; box-shadow: 0 5px 20px #203b3210; white-space: nowrap; }
@@ -357,7 +403,7 @@ defineExpose({ fitGraph, focusCenter })
 .canvas-state button { padding: 9px 18px; background: #2d6a54; border: 0; border-radius: 8px; color: #fff; cursor: pointer; }
 .loading-orbit { width: 32px; height: 32px; border: 2px solid #dfe5de; border-top-color: #2d6a54; border-radius: 50%; animation: spin 1s linear infinite; }
 .empty-tree { font-family: 'Noto Serif SC', 'SimSun', serif; font-size: 48px; color: #b88753; margin-bottom: 8px; }
-.canvas-footnote { position: absolute; bottom: 15px; left: 22px; right: 22px; display: flex; align-items: center; justify-content: center; gap: 7px; color: #6e7b73; font-size: 10px; pointer-events: none; }
+.canvas-footnote { position: absolute; bottom: 15px; left: 22px; right: 22px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 7px; color: #6e7b73; font-size: 10px; pointer-events: none; }
 .legend-line { display: inline-block; width: 14px; border-top: 1.5px solid #8b9e94; margin-left: 8px; }
 .legend-line.spouse { border-color: #b88753; }
 .legend-line.adoptive { border-top-style: dashed; }

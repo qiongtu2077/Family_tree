@@ -29,6 +29,21 @@ function unit(id, parents, childIds) {
   return { id, parents, children: childIds.map(childId => ({ id: childId, kind: 'biological' })) }
 }
 
+/** 生成可重复的高密度无环家系，包含多配偶及跨代婚配。 */
+function denseFamilies(seed, count) {
+  let state = seed
+  const families = []
+  for (let child = 4; child < count; child += 1) {
+    state = (state * 1664525 + 1013904223) >>> 0
+    const first = state % child
+    state = (state * 1664525 + 1013904223) >>> 0
+    let second = state % child
+    if (second === first) second = (second + 1) % child
+    families.push(unit('unit-' + child, ['p' + first, 'p' + second], ['p' + child]))
+  }
+  return families
+}
+
 /** 根据布局节点索引还原每条可视线段的实际端点。 */
 function segments(layout, familyId = null) {
   const nodes = new Map(layout.nodes.map(node => [node.id, node]))
@@ -41,15 +56,17 @@ function segments(layout, familyId = null) {
 function expectDistinctCards(layout) {
   const persons = layout.nodes.filter(node => node.nodeType === 'person')
   expect(new Set(persons.map(node => node.id)).size).toBe(persons.length)
+  const collisions = []
   for (let i = 0; i < persons.length; i += 1) {
     for (let j = i + 1; j < persons.length; j += 1) {
       const a = persons[i]
       const b = persons[j]
       const overlaps = Math.abs(a.x - b.x) < (a.size[0] + b.size[0]) / 2 - 0.01 &&
         Math.abs(a.y - b.y) < (a.size[1] + b.size[1]) / 2 - 0.01
-      expect(overlaps, a.id + ' overlaps ' + b.id).toBe(false)
+      if (overlaps) collisions.push([a.id, b.id])
     }
   }
+  expect(collisions).toEqual([])
 }
 
 /** 判断某个坐标是否落在线段上，允许浮点计算误差。 */
@@ -69,7 +86,20 @@ function intersects(a, b) {
   return onSegment(point, a) && onSegment(point, b)
 }
 
-/** 验证家庭线段连成完整网络，亲子线真正到达每个子女的卡片顶部。 */
+/** 判断实际线段端点是否抵达人卡边界，允许多家庭使用独立端口。 */
+function touchesCard(line, node, topOnly = false) {
+  const left = node.x - node.size[0] / 2
+  const right = node.x + node.size[0] / 2
+  const top = node.y - node.size[1] / 2
+  const bottom = node.y + node.size[1] / 2
+  return [line.a, line.b].some(point => {
+    if (Math.abs(point.y - top) < 0.01 && point.x >= left - 0.01 && point.x <= right + 0.01) return true
+    return !topOnly && ((Math.abs(point.y - bottom) < 0.01 && point.x >= left - 0.01 && point.x <= right + 0.01) ||
+      ((Math.abs(point.x - left) < 0.01 || Math.abs(point.x - right) < 0.01) && point.y >= top - 0.01 && point.y <= bottom + 0.01))
+  })
+}
+
+/** 验证家庭线段连成完整网络，亲子线真正到达每个子女的卡片顶部端口。 */
 function expectConnectedFamily(layout, family) {
   const lines = segments(layout, 'family:' + family.id)
   expect(lines.length).toBeGreaterThan(0)
@@ -88,28 +118,24 @@ function expectConnectedFamily(layout, family) {
   expect(reached.size, family.id + ' has disconnected segments').toBe(lines.length)
   for (const parentId of family.parents) {
     const node = layout.nodes.find(item => item.id === parentId)
-    const boundary = [
-      { x: node.x, y: node.y - node.size[1] / 2 },
-      { x: node.x, y: node.y + node.size[1] / 2 },
-      { x: node.x - node.size[0] / 2, y: node.y },
-      { x: node.x + node.size[0] / 2, y: node.y }
-    ]
-    expect(lines.some(line => boundary.some(point => onSegment(point, line))), family.id + ' misses parent ' + parentId).toBe(true)
+    expect(lines.some(line => touchesCard(line, node)), family.id + ' misses parent ' + parentId).toBe(true)
   }
   for (const child of family.children) {
     const node = layout.nodes.find(item => item.id === child.id)
-    const top = { x: node.x, y: node.y - node.size[1] / 2 }
-    expect(lines.some(line => onSegment(top, line)), family.id + ' misses child ' + child.id).toBe(true)
+    expect(lines.some(line => touchesCard(line, node, true)), family.id + ' misses child ' + child.id).toBe(true)
   }
 }
 
 /** 验证所有可视家谱线都是直角线段，并且不穿过人物卡片内部。 */
 function expectClearOrthogonalLines(layout) {
   const cards = layout.nodes.filter(node => node.nodeType === 'person')
+  expect(layout.nodes.every(node => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true)
+  const diagonals = []
+  const crossings = []
   for (const line of segments(layout)) {
     const vertical = Math.abs(line.a.x - line.b.x) < 0.01
     const horizontal = Math.abs(line.a.y - line.b.y) < 0.01
-    expect(vertical || horizontal, line.edge.id + ' is diagonal').toBe(true)
+    if (!vertical && !horizontal) diagonals.push(line.edge.id)
     for (const card of cards) {
       const left = card.x - card.size[0] / 2
       const right = card.x + card.size[0] / 2
@@ -118,14 +144,47 @@ function expectClearOrthogonalLines(layout) {
       const throughCard = vertical
         ? line.a.x > left + 0.01 && line.a.x < right - 0.01 && Math.max(line.a.y, line.b.y) > top + 0.01 && Math.min(line.a.y, line.b.y) < bottom - 0.01
         : line.a.y > top + 0.01 && line.a.y < bottom - 0.01 && Math.max(line.a.x, line.b.x) > left + 0.01 && Math.min(line.a.x, line.b.x) < right - 0.01
-      expect(throughCard, line.edge.id + ' crosses card ' + card.id).toBe(false)
+      if (throughCard) crossings.push([line.edge.id, card.id])
     }
   }
+  expect(diagonals).toEqual([])
+  expect(crossings).toEqual([])
+  expectExclusiveChannels(layout)
+}
+
+/** 验证不同家庭没有任何正长度的共线重合，单点正交交叉由元数据消歧。 */
+function expectExclusiveChannels(layout) {
+  const lines = segments(layout)
+  const collisions = []
+  for (let i = 0; i < lines.length; i += 1) {
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const first = lines[i]
+      const second = lines[j]
+      if (first.edge.familyId === second.edge.familyId) continue
+      const vertical = Math.abs(first.a.x - first.b.x) < 0.01
+      if (vertical !== (Math.abs(second.a.x - second.b.x) < 0.01)) continue
+      const axis = vertical ? 'x' : 'y'
+      const distance = vertical ? 'y' : 'x'
+      const overlap = Math.abs(first.a[axis] - second.a[axis]) < 0.01 &&
+        Math.min(Math.max(first.a[distance], first.b[distance]), Math.max(second.a[distance], second.b[distance])) -
+        Math.max(Math.min(first.a[distance], first.b[distance]), Math.min(second.a[distance], second.b[distance])) > 0.01
+      if (overlap) collisions.push([first.edge.id, second.edge.id])
+    }
+  }
+  expect(collisions).toEqual([])
 }
 
 /** 返回与输入顺序无关的人物坐标，方便验证稳定布局。 */
 function coordinateSnapshot(layout) {
   return layout.nodes.filter(node => node.nodeType === 'person').map(({ id, x, y, generation }) => ({ id, x, y, generation })).sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** 保存实际通道与交叉描述，验证接口输入逆序不会改变关系走线。 */
+function routingSnapshot(layout) {
+  return {
+    lines: segments(layout).map(({ edge, a, b }) => ({ id: edge.id, routeId: edge.routeId, familyId: edge.familyId, a: [a.x, a.y], b: [b.x, b.y] })).sort((a, b) => a.id.localeCompare(b.id)),
+    crossings: layout.crossings
+  }
 }
 
 // --- 已复现缺陷和复杂家庭回归 --- //
@@ -181,6 +240,34 @@ describe('family layout geometry and relationship regressions', () => {
     expect(layout.edges.filter(edge => edge.familyId === 'family:birth').every(edge => !edge.style.lineDash)).toBe(true)
     expectConnectedFamily(layout, biological)
     expectConnectedFamily(layout, adoptive)
+    expectDistinctCards(layout)
+    expectClearOrthogonalLines(layout)
+  })
+
+  it('keeps biological, adoptive and step families on distinct child ports with their evidence', async () => {
+    const families = [
+      unit('birth', ['father', 'mother'], ['child']),
+      { id: 'adoptive', parents: ['adoptive-parent'], children: [{ id: 'child', kind: 'adoptive' }], type: 'adoptive' },
+      { id: 'step', parents: ['step-parent'], children: [{ id: 'child', kind: 'step' }], type: 'single_parent' }
+    ]
+    const graph = makeGraph(families, { center: 'child' })
+    const layout = await layoutGraph(graph)
+    const child = layout.nodes.find(node => node.id === 'child')
+    const ports = new Set()
+    for (const family of families) {
+      const lines = segments(layout, 'family:' + family.id)
+      const raw = graph.edges.find(edge => edge.source === 'family:' + family.id && edge.target === 'child')
+      for (const line of lines) {
+        expect(line.edge.routeOwnerId).toBe(line.edge.familyId)
+        expect(line.edge.routeId).toBe(line.edge.id)
+        if (line.edge.relation === 'child') expect(line.edge.raw).toEqual(raw)
+        for (const point of [line.a, line.b]) {
+          if (Math.abs(point.y - child.y + child.size[1] / 2) < 0.01 && Math.abs(point.x - child.x) < child.size[0] / 2) ports.add(point.x)
+        }
+      }
+      expectConnectedFamily(layout, family)
+    }
+    expect(ports.size).toBe(3)
     expectDistinctCards(layout)
     expectClearOrthogonalLines(layout)
   })
@@ -291,7 +378,7 @@ describe('family layout geometry and relationship regressions', () => {
       unit('first-generation', ['birth-parent'], ['middle']),
       unit('second-generation', ['middle'], ['adoptive-parent']),
       unit('birth', ['birth-parent'], ['child']),
-      { id: 'adoptive', parents: ['adoptive-parent'], children: [{ id: 'child', kind: 'adoptive' }] }
+      { id: 'late-adoptive', parents: ['adoptive-parent'], children: [{ id: 'child', kind: 'adoptive' }] }
     ]
     const layout = await layoutGraph(makeGraph(families, { center: 'child' }))
     expect(layout.edges.some(edge => edge.familyId === 'family:birth' && edge.segment === 'parent-exit')).toBe(true)
@@ -355,6 +442,15 @@ describe('family layout geometry and relationship regressions', () => {
     const first = await layoutGraph(graph)
     const second = await layoutGraph({ ...graph, nodes: [...graph.nodes].reverse(), edges: [...graph.edges].reverse() })
     expect(coordinateSnapshot(second)).toEqual(coordinateSnapshot(first))
+    expect(routingSnapshot(second)).toEqual(routingSnapshot(first))
+  })
+
+  it('keeps dense routing channels and crossing IDs stable when DTO order is reversed', async () => {
+    const graph = makeGraph(denseFamilies(19, 28), { mode: 'overview' })
+    const first = await layoutGraph(graph)
+    const second = await layoutGraph({ ...graph, nodes: [...graph.nodes].reverse(), edges: [...graph.edges].reverse() })
+    expect(first.crossings.length).toBeGreaterThan(0)
+    expect(routingSnapshot(second)).toEqual(routingSnapshot(first))
   })
 
   it('uses the projection context center before a stale top-level center', async () => {
@@ -378,21 +474,30 @@ describe('family layout geometry and relationship regressions', () => {
   })
 
   it('keeps dense acyclic pedigrees readable with conflicting marriage layers', async () => {
-    for (const seed of [7, 19, 41]) {
-      let state = seed
-      const families = []
-      for (let child = 4; child < 28; child += 1) {
-        state = (state * 1664525 + 1013904223) >>> 0
-        const first = state % child
-        state = (state * 1664525 + 1013904223) >>> 0
-        let second = state % child
-        if (second === first) second = (second + 1) % child
-        families.push(unit('unit-' + child, ['p' + first, 'p' + second], ['p' + child]))
-      }
+    for (const seed of [1, 2, 3, 7, 19, 41]) {
+      const families = denseFamilies(seed, 28)
       const layout = await layoutGraph(makeGraph(families, { mode: 'overview' }))
       expectDistinctCards(layout)
       expectClearOrthogonalLines(layout)
       for (const family of families) expectConnectedFamily(layout, family)
+    }
+  })
+
+  it.each([1, 19])('allocates enough routing space for a 300-person dense pedigree (seed %s)', async seed => {
+    const families = denseFamilies(seed, 300)
+    const layout = await layoutGraph(makeGraph(families, { mode: 'overview', extraPeople: ['p0', 'p1', 'p2', 'p3'] }))
+    expect(layout.nodes.filter(node => node.nodeType === 'person')).toHaveLength(300)
+    expect(new Set(layout.edges.map(edge => edge.familyId))).toEqual(new Set(families.map(family => 'family:' + family.id)))
+    expectDistinctCards(layout)
+    expectClearOrthogonalLines(layout)
+    for (const family of families) expectConnectedFamily(layout, family)
+    expect(layout.crossings.length).toBeGreaterThan(0)
+    const lines = new Map(segments(layout).map(line => [line.edge.id, line]))
+    for (const crossing of layout.crossings) {
+      const over = lines.get(crossing.overEdgeId)
+      const under = lines.get(crossing.underEdgeId)
+      expect(over.edge.familyId).not.toBe(under.edge.familyId)
+      expect(onSegment(crossing, over) && onSegment(crossing, under)).toBe(true)
     }
   })
 

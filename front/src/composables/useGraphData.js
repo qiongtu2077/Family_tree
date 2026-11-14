@@ -17,6 +17,7 @@ import {
   getRelationPath
 } from '../api/graph'
 import { getPersons, searchPersons } from '../api/persons'
+import { createPaternalProjection } from '../graph/paternalProjection'
 
 /**
  * 管理族谱数据读取状态。
@@ -154,6 +155,28 @@ export function useGraphData() {
     )
   }
 
+  /** 读取父系主干，并按实际家庭补读旁支；多个伴侣家庭均按原始事实保留。 */
+  async function loadPaternalGraph(personId, ancestorDepth = 5, sideBranchDepth = 0) {
+    return loadGraph(async () => {
+      const mainline = await getMainlineGraph(personId, ancestorDepth, 1)
+      if (!isRenderableGraph(mainline) || sideBranchDepth === 0) return mainline
+      const coreIds = new Set(createPaternalProjection(mainline, personId, { maxAncestorDepth: ancestorDepth }).paternal_context.core_person_ids)
+      const familyIds = new Set(mainline.nodes.filter(node => node.type === 'familyUnit').map(node => node.id))
+      const roots = [...new Set(mainline.edges.filter(edge => coreIds.has(edge.source) && familyIds.has(edge.target)).map(edge => edge.target))]
+      const branches = await Promise.all(roots.map(id => getBranchGraph(stripFamilyPrefix(id), sideBranchDepth + 1)))
+      // 同一家庭可能从不同祖先到达；以稳定事实 ID 合并，不复制人物或覆盖关系种类。
+      const nodes = new Map(mainline.nodes.map(node => [node.id, node]))
+      const edges = new Map(mainline.edges.map(edge => [edge.id, edge]))
+      const warnings = new Set(mainline.warnings)
+      for (const branch of branches) {
+        for (const node of branch.nodes) if (!nodes.has(node.id)) nodes.set(node.id, node)
+        for (const edge of branch.edges) if (!edges.has(edge.id)) edges.set(edge.id, edge)
+        for (const warning of branch.warnings) warnings.add(warning)
+      }
+      return { ...mainline, nodes: [...nodes.values()], edges: [...edges.values()], warnings: [...warnings] }
+    }, personId, 'mainline')
+  }
+
   /**
    * 加载姻亲谱系图。
    */
@@ -227,6 +250,7 @@ export function useGraphData() {
     loadCenterContext,
     loadFocusGraph,
     loadMainlineGraph,
+    loadPaternalGraph,
     loadInlawGraph,
     loadBridgeGraph,
     loadBranchGraph,

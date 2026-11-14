@@ -156,6 +156,93 @@ describe('useGraphData', () => {
     expect(data.graphContext.value.spouse_id).toBe('p2')
   })
 
+  it('loads paternal close relatives without issuing unnecessary branch requests', async () => {
+    const source = { view_mode: 'mainline', nodes: [{ id: 'center', type: 'person', name: '本人' }], edges: [], warnings: [] }
+    getMainlineGraph.mockResolvedValueOnce(source)
+    const data = useGraphData()
+
+    await data.loadPaternalGraph('center', 4, 0)
+
+    expect(getMainlineGraph).toHaveBeenCalledWith('center', 4, 1)
+    expect(getBranchGraph).not.toHaveBeenCalled()
+    expect(data.graph.value).toEqual(source)
+  })
+
+  it('loads every paternal marriage branch, merges stable facts, and excludes maternal-only roots', async () => {
+    const source = {
+      view_mode: 'mainline', center_person_id: 'center', warnings: ['原范围提示'],
+      nodes: ['center', 'father', 'mother', 'sibling'].map(id => ({ id, type: 'person', name: id })).concat(
+        ['parents', 'remarriage', 'maternal'].map(id => ({ id: 'family:' + id, type: 'familyUnit' }))
+      ),
+      edges: [
+        { id: 'father-child', source: 'father', target: 'center', relation: 'father', metadata: { relationKind: 'biological', certainty: 1 } },
+        { id: 'first-marriage', source: 'father', target: 'family:parents', relation: 'partner' },
+        { id: 'second-marriage', source: 'father', target: 'family:remarriage', relation: 'partner' },
+        { id: 'mother-family', source: 'mother', target: 'family:maternal', relation: 'partner' }
+      ]
+    }
+    const branch = {
+      view_mode: 'branch', nodes: [...source.nodes, { id: 'niece', type: 'person', name: '侄女' }],
+      edges: [...source.edges, { id: 'niece-fact', source: 'sibling', target: 'niece', relation: 'father', metadata: { relationKind: 'biological' } }],
+      warnings: ['旁支范围提示', '原范围提示']
+    }
+    getMainlineGraph.mockResolvedValueOnce(source)
+    getBranchGraph.mockResolvedValue(branch)
+    const data = useGraphData()
+
+    await data.loadPaternalGraph('center', 5, 2)
+
+    expect(getBranchGraph.mock.calls).toEqual([['parents', 3], ['remarriage', 3]])
+    expect(data.graph.value.view_mode).toBe('mainline')
+    expect(data.centerPersonId.value).toBe('center')
+    expect(data.personNodes.value.map(node => node.id)).toContain('niece')
+    expect(data.graph.value.nodes).toHaveLength(source.nodes.length + 1)
+    expect(data.graph.value.edges).toHaveLength(source.edges.length + 1)
+    expect(data.graph.value.warnings).toEqual(['原范围提示', '旁支范围提示'])
+    expect(source.nodes).toHaveLength(7)
+    expect(source.edges).toHaveLength(4)
+  })
+
+  it('preserves the readable graph and reports a paternal branch read failure', async () => {
+    const readable = { view_mode: 'overview', nodes: [{ id: 'old', type: 'person', name: '旧图' }], edges: [], warnings: [] }
+    const source = {
+      view_mode: 'mainline', nodes: [{ id: 'center', type: 'person', name: '本人' }, { id: 'family:f1', type: 'familyUnit' }],
+      edges: [{ id: 'member', source: 'center', target: 'family:f1', relation: 'partner' }], warnings: []
+    }
+    getOverviewGraph.mockResolvedValueOnce(readable)
+    getMainlineGraph.mockResolvedValueOnce(source)
+    getBranchGraph.mockRejectedValueOnce(new Error('旁支读取中断'))
+    const data = useGraphData()
+    await data.loadOverviewGraph()
+
+    await data.loadPaternalGraph('center', 5, 1)
+
+    expect(data.graph.value).toEqual(readable)
+    expect(data.errorMessage.value).toBe('旁支读取中断')
+    expect(data.isLoading.value).toBe(false)
+  })
+
+  it('discards a delayed paternal expansion after another view is selected', async () => {
+    let finishBranch
+    const source = {
+      view_mode: 'mainline', nodes: [{ id: 'center', type: 'person', name: '本人' }, { id: 'family:f1', type: 'familyUnit' }],
+      edges: [{ id: 'member', source: 'center', target: 'family:f1', relation: 'partner' }], warnings: []
+    }
+    const latest = { view_mode: 'overview', nodes: [{ id: 'new', type: 'person', name: '最新' }], edges: [], warnings: [] }
+    getMainlineGraph.mockResolvedValueOnce(source)
+    getBranchGraph.mockImplementationOnce(() => new Promise(resolve => { finishBranch = resolve }))
+    getOverviewGraph.mockResolvedValueOnce(latest)
+    const data = useGraphData()
+    const older = data.loadPaternalGraph('center', 5, 1)
+    await vi.waitFor(() => expect(getBranchGraph).toHaveBeenCalled())
+    await data.loadOverviewGraph()
+    finishBranch(source)
+    await older
+
+    expect(data.graph.value).toEqual(latest)
+    expect(data.isLoading.value).toBe(false)
+  })
+
   it('stores error message and shows an empty graph when focus graph fails', async () => {
     getFocusGraph.mockRejectedValue({
       response: { data: { detail: '人物不存在' } }

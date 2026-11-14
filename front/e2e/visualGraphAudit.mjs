@@ -28,6 +28,7 @@ const screenshots = []
 const findings = []
 const auditCases = []
 const visitedCapsuleIds = new Set()
+let foreignOwnerCapsuleCount = 0
 let api = null
 let centerPerson = null
 let centerContext = null
@@ -61,10 +62,13 @@ async function main() {
     auditCases.push({ id: 'cookie-session-restore', status: 'passed' })
     await auditMainline(page)
     await auditSpouseViews(page)
+    await auditForeignOwnerCapsule(page)
     await auditBranchViews(page)
     await auditOverviewViews(page)
     await auditRelationPath(page)
     await resetCenterToMainline(page)
+    await auditDirectionAndPaternalReading(page)
+    await auditDenseFitFixture(page)
     await auditZoomAndResponsiveViews(page)
   } catch (error) {
     findings.push({ severity: 'error', view: 'audit-runtime', message: error.message })
@@ -277,17 +281,85 @@ async function auditBranchViews(page) {
 
 /** 检验全家族与中心九族；全景保留真实关系线。 */
 async function auditOverviewViews(page) {
+  const source = await apiJson('/api/graph/overview?scope=all&max_nodes=1000')
   await resetCenterToMainline(page)
   await openView(page, VIEWS.overview)
-  await auditCurrentView(page, 'overview-all', 'overview')
+  const initial = await auditOverviewState(page, 'overview-all-collapsed', source, [])
+  assert(initial.summaryCount > 0, '默认全景必须显示真实支系摘要')
+  const branches = await page.evaluate(() => window.__familyTreeGraphDebug.getLayout().nodes.filter(node => node.nodeType === 'branchSummary').map(node => ({ id: node.id, personIds: node.raw.personIds })))
+
+  // 坐标句柄只用于定位；通过用户实际点击触发展开。
+  await page.getByRole('button', { name: '适应视图', exact: true }).click()
+  await waitForGraphSettled(page, 'overview')
+  const target = await page.evaluate(() => {
+    const debug = window.__familyTreeGraphDebug
+    for (const node of debug.getLayout().nodes.filter(node => node.nodeType === 'branchSummary')) {
+      const point = debug.getViewportPoint(node.id)
+      if (document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS') return { id: node.id, point, personIds: node.raw.personIds }
+    }
+    return null
+  })
+  assert(target, '全景没有可真实点击的摘要卡片')
+  await page.mouse.click(target.point.x, target.point.y)
+  await waitForOverviewPeople(page, target.personIds)
+  await auditOverviewState(page, 'overview-canvas-summary-click', source, target.personIds)
+
+  await page.getByRole('button', { name: '收起全部', exact: true }).click()
+  await waitForOverviewPeople(page, [])
+  const expandedPeople = []
+  for (const [index, branch] of branches.entries()) {
+    await page.locator(`[data-branch-id="${escapeAttribute(branch.id)}"]`).click()
+    expandedPeople.push(...branch.personIds)
+    await waitForOverviewPeople(page, expandedPeople)
+    await auditOverviewState(page, `overview-sidebar-expand-${index + 1}`, source, expandedPeople)
+  }
+  await page.getByRole('button', { name: '收起全部', exact: true }).click()
+  await waitForOverviewPeople(page, [])
+  await page.getByRole('button', { name: '展开全部', exact: true }).click()
+  const allPeople = source.nodes.filter(node => node.type === 'person').map(node => node.id)
+  await waitForOverviewPeople(page, allPeople)
+  const full = await auditOverviewState(page, 'overview-expand-all', source, allPeople)
+  assert.equal(full.summaryCount, 0, '全部展开后仍有支系摘要')
+  await changeDirection(page, 'horizontal')
+  await auditOverviewState(page, 'overview-expanded-horizontal', source, allPeople)
+  await changeDirection(page, 'vertical')
+  await page.getByRole('button', { name: '收起全部', exact: true }).click()
+  await waitForOverviewPeople(page, [])
+  await auditOverviewState(page, 'overview-collapse-all', source, [])
+
+  const centerSource = await apiJson(`/api/graph/overview?scope=${encodeURIComponent('center:' + centerPerson.id)}&max_nodes=1000`)
   await page.getByRole('button', { name: '只看中心九族', exact: true }).click()
   await waitForGraphSettled(page, 'overview')
-  await auditCurrentView(page, 'overview-center', 'overview')
+  await auditOverviewState(page, 'overview-center', centerSource, [])
+}
+
+/** 等待指定真实人物精确展开，避免同模式异步布局仍停在上一次摘要状态。 */
+async function waitForOverviewPeople(page, expectedIds) {
+  await page.waitForFunction(ids => {
+    const debug = window.__familyTreeGraphDebug
+    if (!debug || debug.getState().isAnimating || document.querySelector('.canvas-state')) return false
+    const actual = debug.getLayout().nodes.filter(node => node.nodeType === 'person').map(node => node.id).sort()
+    return JSON.stringify(actual) === JSON.stringify([...ids].sort())
+  }, expectedIds, { timeout: 20000 })
+}
+
+/** 与原API人物集合逐ID核对：摘要不是虚构人物，展开及收起的数量严格守恒。 */
+async function auditOverviewState(page, id, source, expandedIds) {
+  const metrics = await auditCurrentView(page, id, 'overview')
+  const originals = source.nodes.filter(node => node.type === 'person')
+  assert.deepEqual([...metrics.representedPersonIds].sort(), originals.map(node => node.id).sort(), `${id}：原图人物丢失、重复或被摘要代理冒充`)
+  assert.deepEqual([...metrics.layoutPersonIds].sort(), [...expandedIds].sort(), `${id}：实际展开人物不匹配`)
+  assert.equal(metrics.totalPersonCount, originals.length, `${id}：画布总人数错误`)
+  const actualPeople = await page.evaluate(() => window.__familyTreeGraphDebug.getLayout().nodes.filter(node => node.nodeType === 'person').map(node => node.raw))
+  const byId = new Map(originals.map(node => [node.id, node]))
+  for (const person of actualPeople) assert.deepEqual(person, byId.get(person.id), `${id}：展开后人物DTO被截断或改写`)
+  assert.equal((await page.locator('.branch-count').innerText()).replace(/\s+/g, ' '), `已展开 ${expandedIds.length} 位 · 收起 ${originals.length - expandedIds.length} 位`, `${id}：侧栏人数与画布不一致`)
+  return metrics
 }
 
 /** 读取胶囊坐标后真实点击，不调用任何调试业务入口。 */
 async function auditCapsules(page, sourceId, restoreSource) {
-  const capsules = await page.evaluate(() => window.__familyTreeGraphDebug.getCapsules().map(node => ({ id: node.id, targetView: node.raw.target_view })))
+  const capsules = await page.evaluate(() => window.__familyTreeGraphDebug.getCapsules().map(node => ({ id: node.id, targetView: node.raw.target_view, ownerId: node.raw.owner_person_id })))
   for (const capsule of capsules) {
     if (visitedCapsuleIds.has(capsule.id)) continue
     visitedCapsuleIds.add(capsule.id)
@@ -303,12 +375,62 @@ async function auditCapsules(page, sourceId, restoreSource) {
       findings.push({ severity: 'error', view: sourceId, message: `胶囊不在可真实点击的画布范围：${capsule.id}` })
       continue
     }
-    const view = VIEWS[capsule.targetView]
+    const foreignOwner = capsule.targetView === 'inlaw' && !centerContext.available_spouses.some(option => option.person.id === capsule.ownerId)
+    const view = VIEWS[foreignOwner ? 'branch' : capsule.targetView]
     if (!view) throw new Error(`胶囊具有未定义目标视图：${capsule.targetView}`)
     await page.mouse.click(point.x, point.y)
     await waitForGraphSettled(page, view.mode)
     await auditCurrentView(page, `capsule-${slug(capsule.id)}`, view.mode)
+    if (foreignOwner) foreignOwnerCapsuleCount += 1
     await restoreSource()
+  }
+}
+
+/** 缺少真实样本时临时追加已有家庭的合法胶囊，验证非中心配偶按真实根分支导航。 */
+async function auditForeignOwnerCapsule(page) {
+  if (foreignOwnerCapsuleCount) return
+  const source = await apiJson(`/api/graph/mainline/${encodeURIComponent(centerPerson.id)}?ancestor_depth=2&descendant_depth=2`)
+  const families = new Set(source.nodes.filter(node => node.type === 'familyUnit').map(node => node.id))
+  const excluded = new Set([centerPerson.id, ...centerContext.available_spouses.map(option => option.person.id)])
+  const origin = source.edges.find(edge => families.has(edge.source) && !excluded.has(edge.target))
+  assert(origin, '非中心配偶胶囊验收缺少已有原生家庭')
+  const familyId = origin.source.slice('family:'.length)
+  const capsuleId = 'capsule:e2e-foreign-owner'
+  const fixture = { ...source, nodes: [...source.nodes, { id: capsuleId, type: 'branchCapsule', title: '验收用原生家庭入口', owner_person_id: origin.target, root_family_unit_id: familyId, relation_to_center: '其他家庭', person_count: 1, generation_count: 1, preview_names: [], target_view: 'inlaw' }] }
+  const pattern = '**/api/graph/mainline/**'
+  /** 只在浏览器提供胶囊导航上下文，原始家庭与人物均取自真实API。 */
+  const handler = async route => {
+    if (route.request().method() === 'GET') await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) })
+    else await route.fallback()
+  }
+  const paths = []
+  /** 只记录图谱请求路径，以证明没有向陌生owner发起错误姻亲查询。 */
+  const observe = operation => { const pathname = new URL(operation.url()).pathname; if (pathname.startsWith('/api/graph/')) paths.push(decodeURIComponent(pathname)) }
+  await page.route(pattern, handler)
+  page.on('request', observe)
+  try {
+    await openView(page, VIEWS.mainline)
+    await page.getByRole('button', { name: '适应视图', exact: true }).click()
+    await waitForGraphSettled(page, 'mainline')
+    const point = await page.evaluate(id => {
+      const point = window.__familyTreeGraphDebug.getViewportPoint(id)
+      return point && document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS' ? point : null
+    }, capsuleId)
+    assert(point, '非中心配偶胶囊未处于可真实点击的位置')
+    paths.length = 0
+    const response = page.waitForResponse(result => new URL(result.url()).pathname.startsWith('/api/graph/branch'))
+    await page.mouse.click(point.x, point.y)
+    await response
+    await waitForGraphSettled(page, 'branch')
+    assert(paths.includes('/api/graph/branch/' + familyId), '胶囊没有请求原始根家庭分支')
+    assert(!paths.some(pathname => pathname.startsWith('/api/graph/inlaw/')), '非中心配偶被错误当作当前中心的姻亲对象')
+    foreignOwnerCapsuleCount += 1
+    auditCases.push({ id: 'browser-fixture-foreign-owner-capsule', fixture: true, ownerId: origin.target, familyId, paths })
+    await auditCurrentView(page, 'foreign-owner-real-family-branch', 'branch')
+  } finally {
+    await page.unroute(pattern, handler)
+    page.off('request', observe)
+    await resetCenterToMainline(page)
   }
 }
 
@@ -340,7 +462,7 @@ async function collectGraphMetrics(page) {
     const bounds = shell.getBoundingClientRect()
     const canvasBounds = canvas.getBoundingClientRect()
     const positions = new Map(layout.nodes.map(node => [node.id, node]))
-    const visibleNodes = layout.nodes.filter(node => ['person', 'branchCapsule'].includes(node.nodeType))
+    const visibleNodes = layout.nodes.filter(node => ['person', 'branchSummary', 'branchCapsule'].includes(node.nodeType))
     const overlaps = []
     for (let index = 0; index < visibleNodes.length; index += 1) {
       const node = visibleNodes[index]
@@ -386,12 +508,53 @@ async function collectGraphMetrics(page) {
       const point = debug.getViewportPoint(node.id)
       return node.nodeType === 'person' && point.x > canvasBounds.left && point.x < canvasBounds.right && point.y > canvasBounds.top && point.y < canvasBounds.bottom
     }).length
+    const visibleSummaries = visibleNodes.filter(node => {
+      const point = debug.getViewportPoint(node.id)
+      return node.nodeType === 'branchSummary' && point.x > canvasBounds.left && point.x < canvasBounds.right && point.y > canvasBounds.top && point.y < canvasBounds.bottom
+    }).length
+    const people = layout.nodes.filter(node => node.nodeType === 'person')
+    const summaries = layout.nodes.filter(node => node.nodeType === 'branchSummary')
+    const representedPersonIds = [...people.map(node => node.id), ...summaries.flatMap(node => node.raw.personIds)]
+    const crossingMarks = [...document.querySelectorAll('.crossing-layer > g')]
+    const anchor = layout.nodes[0]
+    const other = layout.nodes.find(node => Math.abs(node.x - anchor.x) > .01 || Math.abs(node.y - anchor.y) > .01)
+    const anchorPoint = debug.getViewportPoint(anchor.id)
+    const otherPoint = other ? debug.getViewportPoint(other.id) : null
+    const actualZoom = other ? Math.abs(other.x - anchor.x) > .01 ? (otherPoint.x - anchorPoint.x) / (other.x - anchor.x) : (otherPoint.y - anchorPoint.y) / (other.y - anchor.y) : state.zoom / 100
+    const visibleCrossings = state.zoom < 40 ? [] : (layout.crossings || []).map(crossing => ({
+      x: anchorPoint.x + (crossing.x - anchor.x) * actualZoom - canvasBounds.left,
+      y: anchorPoint.y + (crossing.y - anchor.y) * actualZoom - canvasBounds.top
+    })).filter(point => point.x >= -12 && point.x <= canvasBounds.width + 12 && point.y >= -12 && point.y <= canvasBounds.height + 12)
+    const unmatchedCrossings = [...visibleCrossings]
+    let unmatchedMarkers = 0
+    for (const mark of crossingMarks) {
+      const line = mark.querySelector('line')
+      const x = (Number(line?.getAttribute('x1')) + Number(line?.getAttribute('x2'))) / 2
+      const y = (Number(line?.getAttribute('y1')) + Number(line?.getAttribute('y2'))) / 2
+      const index = unmatchedCrossings.findIndex(point => Math.abs(point.x - x) < .5 && Math.abs(point.y - y) < .5)
+      if (index < 0) unmatchedMarkers += 1
+      else unmatchedCrossings.splice(index, 1)
+    }
+    const invalidCrossingMarks = crossingMarks.filter(mark => {
+      const lines = [...mark.querySelectorAll('line')]
+      if (lines.length !== 2) return true
+      const [gap, over] = lines
+      const values = lines.flatMap(line => ['x1', 'x2', 'y1', 'y2'].map(name => Number(line.getAttribute(name))))
+      return values.some(value => !Number.isFinite(value)) || gap.getAttribute('stroke') !== '#fbfcf9' || Number(gap.getAttribute('stroke-width')) <= Number(over.getAttribute('stroke-width'))
+    }).length
     return {
       ...state, canvasCount: document.querySelectorAll('.graph-canvas canvas').length,
       shell: { width: bounds.width, height: bounds.height }, canvas: { width: canvasBounds.width, height: canvasBounds.height },
       viewport: { width: innerWidth, height: innerHeight }, documentWidth: document.documentElement.scrollWidth,
       errorText: document.querySelector('.error-card')?.textContent.trim() || '',
-      inkSamples, opaqueSamples, samples, inkRatio: inkSamples / samples, visiblePeople,
+      inkSamples, opaqueSamples, samples, inkRatio: inkSamples / samples, visiblePeople, visibleSummaries,
+      layoutPersonIds: people.map(node => node.id), representedPersonIds,
+      representedPersonCount: representedPersonIds.length, uniqueRepresentedPersonCount: new Set(representedPersonIds).size,
+      summaryPeopleCount: summaries.reduce((sum, node) => sum + node.raw.personCount, 0),
+      invalidSummaries: summaries.filter(node => node.raw.type !== 'branchSummary' || node.raw.personCount !== node.raw.personIds.length).length,
+      crossingMarkerCount: crossingMarks.length, invalidCrossingMarks,
+      expectedVisibleCrossingCount: visibleCrossings.length, unmatchedCrossingMarkers: unmatchedMarkers + unmatchedCrossings.length,
+      crossingLegend: Boolean(document.querySelector('.crossing-legend')),
       nonFiniteNodes: layout.nodes.filter(node => !Number.isFinite(node.x) || !Number.isFinite(node.y)).map(node => node.id),
       duplicateIds: layout.nodes.length - positions.size, renderedFamilyUnits: layout.nodes.filter(node => node.nodeType === 'familyUnit').length,
       overlaps: overlaps.slice(0, 12), overlapCount: overlaps.length,
@@ -411,7 +574,8 @@ async function auditCurrentView(page, id, expectedMode) {
     [metrics.canvasCount === 1, '页面必须只有一个图谱画布'],
     [metrics.canvas.width >= 280 && metrics.canvas.height >= 300, '画布体积不足'],
     [Math.abs(metrics.shell.width - metrics.canvas.width) <= 3 && Math.abs(metrics.shell.height - metrics.canvas.height) <= 3, '画布尺寸未跟随容器'],
-    [metrics.rawNodeCount > 0 && metrics.layoutNodeCount > 0 && metrics.visiblePeople > 0, '接口、布局或当前视口没有真实人物'],
+    [metrics.rawNodeCount > 0 && metrics.layoutNodeCount > 0 && metrics.visiblePeople + metrics.visibleSummaries > 0, '当前视口没有真实人物或可展开的真实支系摘要'],
+    [metrics.representedPersonCount === metrics.totalPersonCount && metrics.uniqueRepresentedPersonCount === metrics.totalPersonCount && !metrics.invalidSummaries, '真实人物与摘要人数不守恒或出现重复归属'],
     [metrics.inkSamples >= 8 && metrics.inkRatio > .0001, '浅色画布未检测到足够真实文字或关系线墨迹'],
     [!metrics.errorText, `页面显示接口错误：${metrics.errorText}`],
     [!metrics.nonFiniteNodes.length && !metrics.duplicateIds && !metrics.renderedFamilyUnits, '布局存在非法坐标、重复人物或可见家庭中间节点'],
@@ -420,9 +584,13 @@ async function auditCurrentView(page, id, expectedMode) {
     [metrics.cardCrossingCount === 0, '关系线穿过人物或折叠入口卡片'],
     [metrics.documentWidth <= metrics.viewport.width + 2, '页面产生横向溢出']
   ]
+  if (metrics.zoom >= 40 && metrics.crossingCount > 0) {
+    checks.push([metrics.crossingMarkerCount === metrics.expectedVisibleCrossingCount && !metrics.unmatchedCrossingMarkers && !metrics.invalidCrossingMarks && metrics.crossingLegend, '当前可见交叉未显示坐标吻合的SVG断口及两线不相连说明'])
+  }
   for (const [passed, message] of checks) if (!passed) findings.push({ severity: 'error', view: id, message })
   await takeScreenshot(page, id)
   await takeScreenshot(page, `${id}-canvas`, page.locator('.graph-canvas-shell'))
+  return metrics
 }
 
 /** 记录同一人物相对画布中心的像素偏移，检验 resize 未隐式适应全图。 */
@@ -434,6 +602,304 @@ async function viewportSnapshot(page) {
     const bounds = document.querySelector('.graph-canvas').getBoundingClientRect()
     return { nodeId: node.id, zoom: debug.getState().zoom, offsetX: point.x - bounds.left - bounds.width / 2, offsetY: point.y - bounds.top - bounds.height / 2 }
   }, centerPerson.id)
+}
+
+/** 操作独立的方向开关，并核对画布方向及持久化设置。 */
+async function changeDirection(page, direction) {
+  const previous = await page.evaluate(() => ({ direction: window.__familyTreeGraphDebug.getState().direction, cards: window.__familyTreeGraphDebug.getLayout().nodes.filter(node => ['person', 'branchSummary'].includes(node.nodeType)).map(node => ({ id: node.id, x: node.x, y: node.y })) }))
+  await page.getByRole('group', { name: '世代阅读方向', exact: true }).getByRole('button', { name: direction === 'horizontal' ? '横向 · 向右' : '纵向 · 向下', exact: true }).click()
+  await page.waitForFunction(expected => window.__familyTreeGraphDebug?.getState().direction === expected && !window.__familyTreeGraphDebug.getState().isAnimating && !document.querySelector('.canvas-state'), direction)
+  await waitForGraphSettled(page)
+  assert.equal(await page.evaluate(() => localStorage.getItem('familytree:layoutDirection')), direction, '方向未写入localStorage')
+  if (previous.direction !== direction) {
+    const current = await page.evaluate(() => window.__familyTreeGraphDebug.getLayout().nodes.filter(node => ['person', 'branchSummary'].includes(node.nodeType)).map(node => ({ id: node.id, x: node.x, y: node.y })))
+    const byId = new Map(current.map(node => [node.id, node]))
+    for (const before of previous.cards) {
+      const after = byId.get(before.id)
+      // 交换并按卡片长宽比缩放的变换自身也是逆变换。
+      const x = before.y * 140 / 52
+      const y = before.x * 52 / 140
+      assert(after && Math.abs(after.x - x) < .01 && Math.abs(after.y - y) < .01, '方向开关未对实际卡片几何交换世代轴：' + before.id)
+    }
+  }
+}
+
+/** 只读取真实可视人物和父系主干，方向变化不得改变关系范围。 */
+async function readPersonScope(page) {
+  return page.evaluate(() => {
+    const layout = window.__familyTreeGraphDebug.getLayout()
+    return { people: layout.nodes.filter(node => node.nodeType === 'person').map(node => node.id).sort(), core: layout.nodes.filter(node => node.isPaternalCore).map(node => node.id).sort() }
+  })
+}
+
+/** 基于原API的明确生父事实独立计算父系主干和逐层近亲范围，不根据性别推断。 */
+function expectedPaternalScope(graph, sideDepth, maxAncestorDepth) {
+  const people = new Set(graph.nodes.filter(node => node.type === 'person').map(node => node.id))
+  const families = new Map(graph.nodes.filter(node => node.type === 'familyUnit').map(node => [node.id, new Set()]))
+  for (const edge of graph.edges) {
+    if (people.has(edge.source) && families.has(edge.target)) families.get(edge.target).add(edge.source)
+    if (families.has(edge.source) && people.has(edge.target)) families.get(edge.source).add(edge.target)
+  }
+  const confirmed = graph.edges.filter(edge => people.has(edge.source) && people.has(edge.target) && edge.relation === 'father' && edge.metadata?.relationKind === 'biological' && (edge.metadata.certainty ?? 1) === 1)
+  const core = new Set([centerPerson.id])
+  const queue = [{ id: centerPerson.id, depth: 0 }]
+  for (const child of queue) {
+    if (child.depth >= maxAncestorDepth) continue
+    for (const edge of confirmed.filter(record => record.target === child.id)) if (!core.has(edge.source)) { core.add(edge.source); queue.push({ id: edge.source, depth: child.depth + 1 }) }
+  }
+  const selected = new Set(core)
+  let frontier = new Set(core)
+  const expanded = new Set()
+  for (let depth = 0; depth <= sideDepth; depth += 1) {
+    for (const id of frontier) { selected.add(id); expanded.add(id) }
+    for (const members of families.values()) if ([...frontier].some(id => members.has(id))) for (const id of members) selected.add(id)
+    for (const edge of graph.edges) {
+      if (people.has(edge.source) && people.has(edge.target) && ['father', 'mother', 'parent', 'spouse'].includes(edge.relation) && (frontier.has(edge.source) || frontier.has(edge.target))) {
+        selected.add(edge.source); selected.add(edge.target)
+      }
+    }
+    frontier = new Set(confirmed.filter(edge => frontier.has(edge.source) && !expanded.has(edge.target)).map(edge => edge.target))
+  }
+  return { people: [...selected].sort(), core: [...core].sort() }
+}
+
+/** 读取父系入口约定的浅层主线及各主干家庭分支，构建独立验收所需原始事实。 */
+async function paternalSource(ancestorDepth, sideDepth) {
+  const source = await apiJson(`/api/graph/mainline/${encodeURIComponent(centerPerson.id)}?ancestor_depth=${ancestorDepth}&descendant_depth=1`)
+  if (!sideDepth) return source
+  const core = new Set(expectedPaternalScope(source, 0, ancestorDepth).core)
+  const familyIds = new Set(source.nodes.filter(node => node.type === 'familyUnit').map(node => node.id))
+  const roots = new Set(source.edges.filter(edge => core.has(edge.source) && familyIds.has(edge.target)).map(edge => edge.target))
+  const nodes = new Map(source.nodes.map(node => [node.id, node]))
+  const edges = new Map(source.edges.map(edge => [edge.id, edge]))
+  for (const root of [...roots].sort()) {
+    const graph = await apiJson(`/api/graph/branch/${encodeURIComponent(root.slice('family:'.length))}?depth=${sideDepth + 1}`)
+    for (const node of graph.nodes) nodes.set(node.id, node)
+    for (const edge of graph.edges) edges.set(edge.id, edge)
+  }
+  return { ...source, nodes: [...nodes.values()], edges: [...edges.values()] }
+}
+
+/** 验证方向刷新恢复、父系首次纵向、方向独立以及按事实展开旁支的范围语义。 */
+async function auditDirectionAndPaternalReading(page) {
+  const familyScope = await readPersonScope(page)
+  await changeDirection(page, 'horizontal')
+  assert.deepEqual(await readPersonScope(page), familyScope, '横向开关改变了完整家谱关系范围')
+  await auditCurrentView(page, 'mainline-horizontal', 'mainline')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForGraphSettled(page, 'mainline')
+  assert.equal(await page.evaluate(() => window.__familyTreeGraphDebug.getState().direction), 'horizontal', '刷新后未恢复横向设置')
+  assert.equal(await page.getByRole('group', { name: '家谱关系范围', exact: true }).getByRole('button', { name: '完整家谱', exact: true }).getAttribute('aria-pressed'), 'true')
+  auditCases.push({ id: 'direction-local-storage-reload', status: 'passed' })
+
+  const loaded = page.waitForResponse(response => new URL(response.url()).pathname === `/api/graph/mainline/${centerPerson.id}` && new URL(response.url()).searchParams.get('descendant_depth') === '1')
+  await page.getByRole('button', { name: '父系阅读', exact: true }).click()
+  await loaded
+  await waitForGraphSettled(page, 'mainline')
+  assert.equal(await page.evaluate(() => window.__familyTreeGraphDebug.getState().direction), 'vertical', '父系阅读首次进入没有使用纵向')
+  const ancestorDepth = Number(await page.getByLabel('父系上溯范围').inputValue())
+  assert.equal(await page.getByLabel('展开父系旁支').inputValue(), '0', '父系默认未收起远旁支')
+  const initialExpected = expectedPaternalScope(await paternalSource(ancestorDepth, 0), 0, ancestorDepth)
+  assert.deepEqual(await readPersonScope(page), initialExpected, '默认父系范围与已确认生父、配偶和全部直接子女事实不一致')
+  await auditCurrentView(page, 'paternal-default-vertical', 'mainline')
+  await changeDirection(page, 'horizontal')
+  assert.deepEqual(await readPersonScope(page), initialExpected, '改变父系方向改变了关系范围')
+  await auditCurrentView(page, 'paternal-horizontal-same-scope', 'mainline')
+  await auditPaternalFailureRollback(page)
+  await auditStaleReadingMode(page)
+
+  let previous = initialExpected.people
+  for (const sideDepth of [1, 2, 3]) {
+    const source = await paternalSource(ancestorDepth, sideDepth)
+    const expected = expectedPaternalScope(source, sideDepth, ancestorDepth)
+    const response = page.waitForResponse(result => new URL(result.url()).pathname === `/api/graph/mainline/${centerPerson.id}`)
+    await page.getByLabel('展开父系旁支').selectOption(String(sideDepth))
+    await response
+    await waitForGraphSettled(page, 'mainline')
+    assert.deepEqual(await readPersonScope(page), expected, `父系旁支${sideDepth}层与原始关系不符`)
+    assert(previous.every(id => expected.people.includes(id)), '增加父系旁支层数反而丢失已有近亲')
+    assert.equal(await page.evaluate(() => window.__familyTreeGraphDebug.getState().direction), 'horizontal', '展开旁支重置了方向')
+    await auditCurrentView(page, `paternal-side-depth-${sideDepth}`, 'mainline')
+    previous = expected.people
+  }
+  const shallow = page.waitForResponse(result => new URL(result.url()).pathname === `/api/graph/mainline/${centerPerson.id}`)
+  await page.getByLabel('展开父系旁支').selectOption('0')
+  await shallow
+  await waitForGraphSettled(page, 'mainline')
+  assert.deepEqual(await readPersonScope(page), initialExpected, '收起父系旁支没有恢复默认近亲范围')
+  const ancestry = page.waitForResponse(result => new URL(result.url()).pathname === `/api/graph/mainline/${centerPerson.id}` && new URL(result.url()).searchParams.get('ancestor_depth') === '1')
+  await page.getByLabel('父系上溯范围').selectOption('1')
+  await ancestry
+  await waitForGraphSettled(page, 'mainline')
+  const limited = expectedPaternalScope(await paternalSource(1, 0), 0, 1)
+  assert.deepEqual(await readPersonScope(page), limited, '父系上溯一代没有区分主干与边界近亲')
+  assert.equal(await page.evaluate(() => window.__familyTreeGraphDebug.getState().direction), 'horizontal', '调整父系上溯范围改变了方向')
+  await auditCurrentView(page, 'paternal-one-generation-boundary', 'mainline')
+  const complete = page.waitForResponse(result => new URL(result.url()).pathname === `/api/graph/mainline/${centerPerson.id}`)
+  await page.getByRole('button', { name: '完整家谱', exact: true }).click()
+  await complete
+  await waitForGraphSettled(page, 'mainline')
+  assert.deepEqual(await readPersonScope(page), familyScope, '返回完整家谱未恢复原人物范围')
+  assert.equal(await page.evaluate(() => window.__familyTreeGraphDebug.getState().direction), 'horizontal', '切回完整家谱重置了方向')
+  await changeDirection(page, 'vertical')
+}
+
+/** 用浏览器内200空图响应验证父系范围及真实胶囊导航失败时回滚，不写数据库。 */
+async function auditPaternalFailureRollback(page) {
+  for (const operation of ['side-depth', 'branch-capsule']) {
+    const scope = await readPersonScope(page)
+    const before = await page.evaluate(() => ({ direction: window.__familyTreeGraphDebug.getState().direction, view: window.__familyTreeGraphDebug.getState().viewMode, caption: document.querySelector('.status-card > strong').textContent.trim() }))
+    const pattern = operation === 'side-depth' ? '**/api/graph/mainline/**' : '**/api/graph/branch**'
+    const viewMode = operation === 'side-depth' ? 'mainline' : 'branch'
+    /** 只为本项真实交互返回空图，HTTP200不污染接口错误检测。 */
+    const handler = async route => {
+      if (route.request().method() === 'GET') await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ view_mode: viewMode, center_person_id: centerPerson.id, view_context: {}, nodes: [], edges: [], warnings: [], hidden_relation_count: 0 }) })
+      else await route.fallback()
+    }
+    await page.route(pattern, handler)
+    try {
+      if (operation === 'side-depth') {
+        const response = page.waitForResponse(result => new URL(result.url()).pathname === `/api/graph/mainline/${centerPerson.id}`)
+        await page.getByLabel('展开父系旁支').selectOption('1')
+        await response
+        await page.waitForFunction(() => {
+          const select = [...document.querySelectorAll('.paternal-controls label')].find(label => label.textContent.includes('展开父系旁支'))?.querySelector('select')
+          return select?.value === '0' && document.querySelector('.error-card') && !document.querySelector('.canvas-state')
+        }, null, { timeout: 15000 })
+        assert.equal(await page.getByLabel('展开父系旁支').inputValue(), '0', '空响应失败后旁支控件未回滚到0')
+      } else {
+        await page.getByRole('button', { name: '适应视图', exact: true }).click()
+        await waitForGraphSettled(page, 'mainline')
+        const capsule = await page.evaluate(() => {
+          const debug = window.__familyTreeGraphDebug
+          for (const node of debug.getCapsules().filter(item => item.raw.target_view === 'branch')) {
+            const point = debug.getViewportPoint(node.id)
+            if (document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS') return { id: node.id, point }
+          }
+          return null
+        })
+        assert(capsule, '父系失败验收没有可真实点击的后代分支胶囊')
+        const response = page.waitForResponse(result => new URL(result.url()).pathname.startsWith('/api/graph/branch'))
+        await page.mouse.click(capsule.point.x, capsule.point.y)
+        await response
+        await page.locator('.error-card').waitFor()
+      }
+      await waitForGraphSettled(page, 'mainline')
+      assert((await page.locator('.error-card').innerText()).trim(), '空响应失败没有向用户显示可恢复错误')
+      assert.deepEqual(await readPersonScope(page), scope, '空响应失败改变了原父系人物或主干')
+      assert.equal(await page.getByRole('group', { name: '家谱关系范围', exact: true }).getByRole('button', { name: '父系阅读', exact: true }).getAttribute('aria-pressed'), 'true', '空响应失败后父系阅读选择被改写')
+      const after = await page.evaluate(() => ({ direction: window.__familyTreeGraphDebug.getState().direction, view: window.__familyTreeGraphDebug.getState().viewMode, caption: document.querySelector('.status-card > strong').textContent.trim() }))
+      assert.deepEqual(after, before, '空响应失败没有保留原视图、父系标题和方向')
+      const id = `paternal-empty-${operation}-rollback`
+      auditCases.push({ id, fixture: true, operation: 'empty-response-failure-rollback', personCount: scope.people.length, coreCount: scope.core.length, preserved: after })
+      await takeScreenshot(page, id)
+    } finally {
+      await page.unroute(pattern, handler)
+      const close = page.getByRole('button', { name: '关闭错误提示', exact: true })
+      if (await close.isVisible()) await close.click()
+    }
+  }
+}
+
+/** 暂挂完整家谱请求、成功切入全景后再返回旧空图，旧失败不得回滚最新阅读模式。 */
+async function auditStaleReadingMode(page) {
+  const scope = await readPersonScope(page)
+  const direction = await page.evaluate(() => window.__familyTreeGraphDebug.getState().direction)
+  let release
+  let notifyIntercepted
+  const gate = new Promise(resolve => { release = resolve })
+  const intercepted = new Promise(resolve => { notifyIntercepted = resolve })
+  const pattern = '**/api/graph/mainline/**'
+  /** 延迟200空图响应以触发旧请求失败分支，完全局限于浏览器网络拦截。 */
+  const handler = async route => {
+    notifyIntercepted()
+    await gate
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ view_mode: 'mainline', center_person_id: centerPerson.id, view_context: {}, nodes: [], edges: [], warnings: [], hidden_relation_count: 0 }) })
+  }
+  await page.route(pattern, handler)
+  try {
+    const lateResponse = page.waitForResponse(result => new URL(result.url()).pathname === `/api/graph/mainline/${centerPerson.id}`)
+    await page.getByRole('button', { name: '完整家谱', exact: true }).click()
+    await intercepted
+    await openView(page, VIEWS.overview)
+    release()
+    await (await lateResponse).finished()
+    await waitForGraphSettled(page, 'overview')
+    assert.equal(await page.getByRole('group', { name: '家谱关系范围', exact: true }).getByRole('button', { name: '完整家谱', exact: true }).getAttribute('aria-pressed'), 'true', '旧失败请求回滚了最新完整家谱模式')
+    assert.equal((await page.locator('.status-card > strong').innerText()).trim(), VIEWS.overview.title, '旧失败请求覆盖了全景标题')
+    assert.equal(await page.locator('.error-card').count(), 0, '旧失败请求污染了最新视图的错误提示')
+    const source = await apiJson('/api/graph/overview?scope=all&max_nodes=1000')
+    await auditOverviewState(page, 'stale-reading-mode-response-ignored', source, [])
+  } finally {
+    release()
+    await page.unroute(pattern, handler)
+  }
+  await resetCenterToMainline(page)
+  const response = page.waitForResponse(result => new URL(result.url()).pathname === `/api/graph/mainline/${centerPerson.id}`)
+  await page.getByRole('button', { name: '父系阅读', exact: true }).click()
+  await response
+  await waitForGraphSettled(page, 'mainline')
+  assert.deepEqual(await readPersonScope(page), scope, '过期请求验收后恢复父系范围失败')
+  assert.equal(await page.evaluate(() => window.__familyTreeGraphDebug.getState().direction), direction, '恢复父系阅读改变了既有方向')
+}
+
+/** 仅在浏览器内构造300人宽大家庭，验收Worker与低于8%的动态适应倍率。 */
+async function auditDenseFitFixture(page) {
+  const familyId = 'family:e2e-dense-fixture'
+  const nodes = [{ id: familyId, type: 'familyUnit', family_type: 'marriage', display_order: 0 }]
+  const edges = []
+  for (let index = 0; index < 300; index += 1) {
+    const id = 'e2e-dense-person:' + index
+    nodes.push({ id, type: 'person', name: '模拟人物' + index, gender: 'U', is_alive: true })
+    edges.push(index < 2
+      ? { id: 'dense-partner:' + index, source: id, target: familyId, relation: 'partner', style: 'spouse', metadata: {} }
+      : { id: 'dense-child:' + index, source: familyId, target: id, relation: 'biological', style: 'solid', metadata: { relationKind: 'biological', certainty: 1 } })
+  }
+  const fixture = { view_mode: 'overview', center_person_id: null, view_context: {}, nodes, edges, warnings: [], hidden_relation_count: 0 }
+  const pattern = '**/api/graph/overview**'
+  /** 截取单个只读图谱请求，不向真实数据库写入模拟资料。 */
+  const handler = async route => {
+    if (route.request().method() === 'GET' && new URL(route.request().url()).pathname === '/api/graph/overview') await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) })
+    else await route.fallback()
+  }
+  await page.route(pattern, handler)
+  try {
+    await openView(page, VIEWS.overview)
+    await page.getByRole('button', { name: '展开全部', exact: true }).click()
+    await waitForOverviewPeople(page, nodes.filter(node => node.type === 'person').map(node => node.id))
+    await page.getByRole('button', { name: '适应视图', exact: true }).click()
+    await waitForGraphSettled(page, 'overview')
+    const metrics = await page.evaluate(() => {
+      const debug = window.__familyTreeGraphDebug
+      const state = debug.getState()
+      const cards = debug.getLayout().nodes.filter(node => node.nodeType === 'person')
+      const first = cards[0]
+      const second = cards.find(node => Math.abs(node.x - first.x) > .01)
+      const a = debug.getViewportPoint(first.id)
+      const b = debug.getViewportPoint(second.id)
+      const zoom = (b.x - a.x) / (second.x - first.x)
+      const bounds = document.querySelector('.graph-canvas').getBoundingClientRect()
+      const padding = bounds.width < 600 ? [70, 28, 90, 28] : [80, 56, 90, 56]
+      const clipped = cards.filter(node => {
+        const point = debug.getViewportPoint(node.id)
+        const x = point.x - bounds.left
+        const y = point.y - bounds.top
+        return x - node.size[0] * zoom / 2 < padding[3] - 2 || x + node.size[0] * zoom / 2 > bounds.width - padding[1] + 2 || y - node.size[1] * zoom / 2 < padding[0] - 2 || y + node.size[1] * zoom / 2 > bounds.height - padding[2] + 2
+      }).map(node => node.id)
+      return { zoom, displayedZoom: state.zoom, personCount: cards.length, totalPersonCount: state.totalPersonCount, canvasCount: state.canvasCount, clipped }
+    })
+    assert.equal(metrics.personCount, 300, '密集图未完整经过Worker展开')
+    assert.equal(metrics.totalPersonCount, 300)
+    assert.equal(metrics.canvasCount, 1)
+    assert(metrics.zoom > 0 && metrics.zoom < .08, '密集图适应倍率仍被固定8%下限截断')
+    assert.deepEqual(metrics.clipped, [], '密集图适应视图后仍有卡片越出约定padding')
+    auditCases.push({ id: 'browser-fixture-dense-300-fit', fixture: true, metrics })
+    await takeScreenshot(page, 'browser-fixture-dense-300-fit')
+  } finally {
+    await page.unroute(pattern, handler)
+    await openView(page, VIEWS.overview)
+    await resetCenterToMainline(page)
+  }
 }
 
 /** 操作真实缩放按钮和四种视口，检验视野保留、响应式体积及业务面板。 */
@@ -544,6 +1010,11 @@ async function writeReport() {
 /** 转义项目明确提供的 data-option-id 属性选择器。 */
 function optionSelector(value) {
   return `[data-testid="graph-option-card"][data-option-id="${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`
+}
+
+/** 转义支系列表data属性中的稳定ID，不使用文字猜测同名家庭。 */
+function escapeAttribute(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
 /** 转换为安全文件名片段，保留中文描述便于人工核对。 */
