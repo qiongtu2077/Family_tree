@@ -8,16 +8,21 @@
 
 ## 配置凭据
 
-在 `deploy/.env` 中配置自选密码。该文件已被 Git 忽略：
+复制 `deploy/.env.example` 为 `deploy/.env`，手动填写账号及自选密码。该文件已被 Git 忽略，模板凭据均留空：
 
 ```dotenv
-POSTGRES_PASSWORD='<set-a-local-password>'
-FAMILYTREE_ADMIN_PASSWORD='<set-admin-password>'
-FAMILYTREE_TEST_PASSWORD='<set-test-password>'
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+FAMILYTREE_ADMIN_USERNAME=
+FAMILYTREE_ADMIN_PASSWORD=
+FAMILYTREE_ADMIN_EMAIL=
+FAMILYTREE_TEST_USERNAME=
+FAMILYTREE_TEST_PASSWORD=
+FAMILYTREE_TEST_EMAIL=
 SERVER_URL=http://localhost:8080
 ```
 
-`POSTGRES_PASSWORD` 没有默认值；未配置时 Compose 会直接报错。密码包含 `$`、`#` 等字符时使用单引号包住整个值。`FAMILYTREE_TEST_PASSWORD` 仅初始化演示账号时需要；`SERVER_URL` 在服务器上改为浏览器可访问的正式地址，邮件审批链接会使用它。
+`POSTGRES_PASSWORD` 没有默认值；未配置时 Compose 会直接报错。密码包含 `$`、`#` 等字符时使用单引号包住整个值。`FAMILYTREE_TEST_PASSWORD` 仅初始化演示账号时需要；`SERVER_URL` 在服务器上改为浏览器可访问的正式地址，邮件审批链接会使用它。空白示例不能直接用于启动或初始化，使用前必须填写；已有数据库的账号记录不因清空配置而改变。
 
 PostgreSQL 初次启动创建数据库 `familytree` 和用户 `familytree`。密码只在空数据卷首次初始化时生效；之后只改 `.env` 不会更改已有数据库用户的密码。
 
@@ -36,14 +41,18 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml ps
 POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5432
 POSTGRES_DB=familytree
-POSTGRES_USER=familytree
-POSTGRES_PASSWORD='<same-password-as-deploy-env>'
-FAMILYTREE_ADMIN_PASSWORD='<set-admin-password>'
-FAMILYTREE_TEST_PASSWORD='<set-test-password>'
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+FAMILYTREE_ADMIN_USERNAME=
+FAMILYTREE_ADMIN_PASSWORD=
+FAMILYTREE_ADMIN_EMAIL=
+FAMILYTREE_TEST_USERNAME=
+FAMILYTREE_TEST_PASSWORD=
+FAMILYTREE_TEST_EMAIL=
 SERVER_URL=http://localhost:8000
 ```
 
-连接地址由 SQLAlchemy 根据分项参数生成，密码无需手工 URL 转义。应用使用 Psycopg 3 驱动。
+使用随附 Compose 新建的数据库时，`POSTGRES_USER` 填 `familytree`；密码与 `deploy/.env` 保持一致。本地初始化账号也需填写对应用户名、密码和邮箱。连接地址由 SQLAlchemy 根据分项参数生成，密码无需手工 URL 转义。应用使用 Psycopg 3 驱动。
 
 本项目专用 Conda 环境为 `familytree`。如尚未创建，先执行 `conda create -n familytree python=3.11`。运行后端前必须激活环境：
 
@@ -92,9 +101,9 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec backend 
 ```dotenv
 SMTP_SERVER=smtp.example.com
 SMTP_PORT=465
-SMTP_SENDER_EMAIL=<sender-email>
-SMTP_SENDER_PASSWORD=<mail-app-password>
-SMTP_ADMIN_EMAIL=<admin-email>
+SMTP_SENDER_EMAIL=
+SMTP_SENDER_PASSWORD=
+SMTP_ADMIN_EMAIL=
 ```
 
 ## 数据持久化与旧数据

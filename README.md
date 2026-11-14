@@ -73,10 +73,11 @@ Family_tree/
 
 无需另外安装 PostgreSQL 桌面程序；已有 Docker Desktop 时可直接运行官方 PostgreSQL 镜像。没有 Docker 时也可安装 PostgreSQL 18，再按相同连接参数配置。
 
-在 `deploy/.env` 中设置自选密码（文件已被 Git 忽略，不要提交凭据）：
+复制 `deploy/.env.example` 为 `deploy/.env`，填写账号及自选密码（文件已被 Git 忽略，不要提交凭据）。模板中的凭据均留空：
 
 ```dotenv
-POSTGRES_PASSWORD=<set-a-local-password>
+POSTGRES_USER=
+POSTGRES_PASSWORD=
 ```
 
 在项目根目录启动数据库：
@@ -85,7 +86,7 @@ POSTGRES_PASSWORD=<set-a-local-password>
 docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d
 ```
 
-数据库只监听 `127.0.0.1:5432`，默认数据库与用户名均为 `familytree`。复制 `after/.env.example` 为 `after/.env`，将 `POSTGRES_PASSWORD` 改为同一密码，并设置本地账号密码。连接参数分项配置，密码无需自行做 URL 转义。
+数据库只监听 `127.0.0.1:5432`，随附 Compose 初建的数据库与用户名均为 `familytree`。复制 `after/.env.example` 为 `after/.env`，手动填写 `POSTGRES_USER` 和与数据库一致的 `POSTGRES_PASSWORD`，并填写初始化账号所需的用户名、密码和邮箱。连接参数分项配置，密码无需自行做 URL 转义。邮件账号和授权码同样留空，启用邮件时再填写；明确留空的密码会阻止初始化，不会改用本地账密中的其他密码。
 
 启动后端前，必须激活项目专用 Conda 环境 `familytree`；不存在该环境时先创建，禁止在默认环境执行项目 Python 命令：
 
