@@ -18,10 +18,12 @@ def build_database_url() -> URL:
         if url.get_backend_name() != "postgresql":
             raise ValueError("DATABASE_URL 必须使用 PostgreSQL；旧 SQLite 文件请通过迁移工具读取")
         return url.set(drivername="postgresql+psycopg")
-    if not settings.postgres_password:
+    if settings.auth_enabled and not settings.postgres_password:
         raise ValueError("缺少 POSTGRES_PASSWORD，请在 after/.env 中配置 PostgreSQL 连接")
-    return URL.create("postgresql+psycopg", username=settings.postgres_user,
-                      password=settings.postgres_password, host=settings.postgres_host,
+    # 本地免登录测试使用现有数据库角色，连接端可以不提供密码。
+    username = settings.postgres_user or ("familytree" if not settings.auth_enabled else None)
+    return URL.create("postgresql+psycopg", username=username,
+                      password=settings.postgres_password or None, host=settings.postgres_host,
                       port=settings.postgres_port, database=settings.postgres_db)
 
 

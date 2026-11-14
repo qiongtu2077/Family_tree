@@ -1,6 +1,6 @@
 <template>
   <div class="family-graph-view">
-    <GraphToolbar :model-value="interactions.selectedView.value" v-model:search-keyword="interactions.searchKeyword.value" :is-admin="isAdmin" :center-person-name="centerPersonName"
+    <GraphToolbar :model-value="interactions.selectedView.value" v-model:search-keyword="interactions.searchKeyword.value" :is-admin="isAdmin" :auth-enabled="authEnabled" :center-person-name="centerPersonName"
       @update:model-value="requestView" @search="handleSearch" @open-center="openCenterModal" @show-center-scope="showCenterScope" @open-relation="openRelationPanel" @open-admin="openAdminPanel" @open-manage="manageOpen = true" @open-requests="requestsOpen = true" @open-profile="openOwnProfile" @logout="$emit('logout')" />
 
     <main class="workspace" :class="{ 'has-detail': interactions.selectedPerson.value }">
@@ -93,7 +93,7 @@ import { getPersonDetail } from '../api/genealogy'
 import { projectOverviewBranches } from '../graph/overviewBranches'
 import { createPaternalProjection } from '../graph/paternalProjection'
 
-const props = defineProps({ currentUser: { type: Object, default: null }, isAdmin: { type: Boolean, default: false } })
+const props = defineProps({ currentUser: { type: Object, default: null }, isAdmin: { type: Boolean, default: false }, authEnabled: { type: Boolean, default: true } })
 defineEmits(['logout'])
 const data = useGraphData()
 const interactions = useGraphInteractions(data)

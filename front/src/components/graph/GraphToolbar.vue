@@ -16,7 +16,7 @@
         <button v-if="isAdmin" @click="$emit('openManage')">资料管理</button>
         <button v-if="isAdmin" @click="$emit('openRequests')">账号审批</button>
         <button v-if="isAdmin" @click="$emit('openAdmin')">管理诊断</button>
-        <button class="ghost-btn" @click="$emit('logout')">退出</button>
+        <button v-if="authEnabled" class="ghost-btn" @click="$emit('logout')">退出</button>
       </div>
     </div>
     <div class="toolbar-bottom">
@@ -39,6 +39,7 @@ defineProps({
   modelValue: { type: String, required: true },
   searchKeyword: { type: String, default: '' },
   isAdmin: { type: Boolean, default: false },
+  authEnabled: { type: Boolean, default: true },
   centerPersonName: { type: String, default: '' }
 })
 defineEmits(['update:modelValue', 'update:searchKeyword', 'search', 'openCenter', 'showCenterScope', 'openRelation', 'openProfile', 'openManage', 'openRequests', 'openAdmin', 'logout'])

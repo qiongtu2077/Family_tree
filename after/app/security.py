@@ -11,6 +11,7 @@ from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Session
 
 from .database import Base, get_db
+from .config import get_settings
 from .models import User
 
 SESSION_COOKIE = "familytree_session"
@@ -54,6 +55,16 @@ def verify_password(password: str, stored: str) -> bool:
 # --- 会话生命周期与请求权限 --- #
 
 
+def local_test_user(db: Session) -> User:
+    """免登录测试复用现有管理员，空库则建立无账密的测试身份。"""
+    user = db.query(User).filter(User.is_admin.is_(True), User.is_active.is_(True)).order_by(User.id).first()
+    if user is None:
+        user = User(username="", password="", email="", real_name="本地测试", is_admin=True, is_active=True)
+        db.add(user)
+        db.flush()
+    return user
+
+
 def utc_now() -> datetime:
     """返回不带时区的 UTC 时间，与数据库 DateTime 列一致。"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -89,7 +100,9 @@ def revoke_session(db: Session, request: Request, response: Response) -> None:
 
 
 def require_user(request: Request, db: Session = Depends(get_db)) -> User:
-    """根据 Cookie 查验服务端会话及账号状态，拒绝伪造用户编号。"""
+    """测试模式直接使用管理员；启用认证时校验真实 Cookie 会话。"""
+    if not get_settings().auth_enabled:
+        return local_test_user(db)
     token = request.cookies.get(SESSION_COOKIE)
     session = db.get(UserSession, session_hash(token)) if token else None
     if session is None or session.expires_at <= utc_now():

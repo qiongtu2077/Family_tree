@@ -68,8 +68,8 @@ def login(request: LoginRequest, http_request: Request, response: Response, db: 
 
 @router.get("/me")
 def get_current_user(user: User = Depends(require_user)):
-    """从真实服务端会话恢复用户，查询参数不能指定或冒充账号。"""
-    return {"success": True, "user": serialize_user(user)}
+    """返回当前用户及登录模式，供页面决定直接进入或显示登录页。"""
+    return {"success": True, "user": serialize_user(user), "auth_enabled": get_settings().auth_enabled}
 
 
 @router.post("/logout")

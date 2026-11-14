@@ -28,6 +28,8 @@ PostgreSQL 初次启动创建数据库 `familytree` 和用户 `familytree`。密
 
 ## 方式一：本地开发
 
+本机单人测试使用免登录模式：`after/.env` 设置 `AUTH_ENABLED=False`，数据库和登录账密均可留空。下面的本地 PostgreSQL Compose 使用免密码连接；打开前端直接进入管理工作区。
+
 在项目根目录执行：
 
 ```powershell
@@ -52,7 +54,7 @@ FAMILYTREE_TEST_EMAIL=
 SERVER_URL=http://localhost:8000
 ```
 
-使用随附 Compose 新建的数据库时，`POSTGRES_USER` 填 `familytree`；密码与 `deploy/.env` 保持一致。本地初始化账号也需填写对应用户名、密码和邮箱。连接地址由 SQLAlchemy 根据分项参数生成，密码无需手工 URL 转义。应用使用 Psycopg 3 驱动。
+免登录测试不需要初始化账号，也不需要填写上面的账号密码字段；应用会使用本地数据库角色。需要验证正式登录流程时再设置 `AUTH_ENABLED=True` 并填写连接和初始化凭据。应用使用 Psycopg 3 驱动。
 
 本项目专用 Conda 环境为 `familytree`。如尚未创建，先执行 `conda create -n familytree python=3.11`。运行后端前必须激活环境：
 

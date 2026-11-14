@@ -11,6 +11,7 @@
     v-else
     :current-user="currentUser"
     :is-admin="isAdmin"
+    :auth-enabled="authEnabled"
     @logout="handleLogout"
   />
 </template>
@@ -28,6 +29,7 @@ import { SESSION_EXPIRED_EVENT } from './api/http'
 
 const {
   isLoggedIn,
+  authEnabled,
   currentUser,
   isAdmin,
   isCheckingAuth,

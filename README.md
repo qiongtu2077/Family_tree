@@ -4,7 +4,7 @@
 
 ## 核心能力
 
-- 登录与角色权限：使用服务端会话和 HttpOnly Cookie，刷新页面后恢复登录，区分普通用户与管理员权限。
+- 本地免登录测试：`AUTH_ENABLED=False` 时打开页面直接进入并使用管理功能；启用认证后使用服务端会话、HttpOnly Cookie 及角色权限。
 - 人物、家庭单元与关系管理：管理员维护人物档案、家庭成员、伴侣和生养关系，普通用户编辑本人资料并上传头像与照片。
 - 五种家谱视图：本家主线、姻亲谱系、联姻桥接、后代分支和家族全景，支持中心人物导航与折叠分支入口。
 - 二维阅读：横纵方向切换、父系主干阅读、家族支系聚合展开，以及独立走线通道和交叉断口。
@@ -73,9 +73,10 @@ Family_tree/
 
 无需另外安装 PostgreSQL 桌面程序；已有 Docker Desktop 时可直接运行官方 PostgreSQL 镜像。没有 Docker 时也可安装 PostgreSQL 18，再按相同连接参数配置。
 
-复制 `deploy/.env.example` 为 `deploy/.env`，填写账号及自选密码（文件已被 Git 忽略，不要提交凭据）。模板中的凭据均留空：
+本地单人测试无需填写账号密码。复制 `after/.env.example` 为 `after/.env`，保留以下设置：
 
 ```dotenv
+AUTH_ENABLED=False
 POSTGRES_USER=
 POSTGRES_PASSWORD=
 ```
@@ -83,10 +84,10 @@ POSTGRES_PASSWORD=
 在项目根目录启动数据库：
 
 ```powershell
-docker compose --env-file deploy/.env -f deploy/docker-compose.postgres.yml up -d
+docker compose -f deploy/docker-compose.postgres.yml up -d
 ```
 
-数据库只监听 `127.0.0.1:5432`，随附 Compose 初建的数据库与用户名均为 `familytree`。复制 `after/.env.example` 为 `after/.env`，手动填写 `POSTGRES_USER` 和与数据库一致的 `POSTGRES_PASSWORD`，并填写初始化账号所需的用户名、密码和邮箱。连接参数分项配置，密码无需自行做 URL 转义。邮件账号和授权码同样留空，启用邮件时再填写；明确留空的密码会阻止初始化，不会改用本地账密中的其他密码。
+数据库只监听 `127.0.0.1:5432`，本地 Compose 使用免密码连接；应用在测试模式下使用现有 `familytree` 数据库角色，无需手动填写连接账号。打开页面会直接使用现有管理员的功能；空账号库自动建立空账密的测试身份。邮件配置可以继续留空。正式部署使用独立的 `deploy/docker-compose.yml`，并设置 `AUTH_ENABLED=True`。
 
 启动后端前，必须激活项目专用 Conda 环境 `familytree`；不存在该环境时先创建，禁止在默认环境执行项目 Python 命令：
 

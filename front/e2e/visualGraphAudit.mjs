@@ -32,6 +32,7 @@ let foreignOwnerCapsuleCount = 0
 let api = null
 let centerPerson = null
 let centerContext = null
+let authEnabled = true
 
 // --- 登录会话与只读运行边界 --- //
 
@@ -41,9 +42,12 @@ async function main() {
   let browser = null
   let page = null
   try {
-    if (!PASSWORD) throw new Error('缺少本地巡检凭据：请设置 FAMILYTREE_E2E_PASSWORD 或配置未跟踪的账密文件')
     api = await request.newContext({ baseURL: API_URL })
-    const user = (await apiJson('/api/auth/login', 'POST', { username: USERNAME, password: PASSWORD })).user
+    const current = await api.get('/api/auth/me')
+    const state = current.ok() ? await current.json() : null
+    authEnabled = state?.auth_enabled !== false
+    if (authEnabled && !PASSWORD) throw new Error('缺少本地巡检凭据：请设置 FAMILYTREE_E2E_PASSWORD 或配置未跟踪的账密文件')
+    const user = authEnabled ? (await apiJson('/api/auth/login', 'POST', { username: USERNAME, password: PASSWORD })).user : state.user
     if (!user?.is_admin) throw new Error('完整巡检需要现有管理员账号，以读取资料管理和账号审批面板')
     if (PREPARE_DATA) await prepareBackendData()
     centerPerson = await resolveCenterPerson()
@@ -52,14 +56,19 @@ async function main() {
     page = await browser.newPage({ viewport: { width: 1440, height: 980 }, deviceScaleFactor: 1 })
     await protectReadOnlyBrowser(page)
     await page.goto(FRONTEND_URL, { waitUntil: 'domcontentloaded' })
-    await loginThroughPage(page)
+    if (authEnabled) await loginThroughPage(page)
+    else {
+      await page.getByRole('heading', { name: '家族谱系', exact: true }).waitFor()
+      assert.equal(await page.getByRole('heading', { name: '登录族谱', exact: true }).count(), 0, '免登录模式仍显示登录页')
+      assert.equal(await page.getByRole('button', { name: '退出', exact: true }).count(), 0, '免登录模式仍提供无效退出入口')
+    }
     await selectCenterPerson(page)
     await auditNameSearch(page)
     // 刷新后必须凭服务端 Cookie 恢复会话。
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.getByRole('heading', { name: '家族谱系', exact: true }).waitFor()
     await waitForGraphSettled(page, 'mainline')
-    auditCases.push({ id: 'cookie-session-restore', status: 'passed' })
+    auditCases.push({ id: authEnabled ? 'cookie-session-restore' : 'local-test-entry-restore', status: 'passed' })
     await auditMainline(page)
     await auditSpouseViews(page)
     await auditForeignOwnerCapsule(page)
@@ -1001,7 +1010,7 @@ async function takeScreenshot(page, name, element = null) {
 async function writeReport() {
   await writeFile(path.join(REPORT_DIR, 'report.json'), JSON.stringify({
     generatedAt: new Date().toISOString(), frontendUrl: FRONTEND_URL, apiUrl: API_URL,
-    dataPreparation: PREPARE_DATA ? 'explicitly-enabled' : 'disabled', centerPersonId: centerPerson?.id || '',
+    dataPreparation: PREPARE_DATA ? 'explicitly-enabled' : 'disabled', authEnabled, centerPersonId: centerPerson?.id || '',
     coverage: { spouseOptionCount: centerContext?.available_spouses.length || 0, familyOptionCount: centerContext?.available_family_units.length || 0, capsuleCount: visitedCapsuleIds.size, screenshotCount: screenshots.length, auditCaseCount: auditCases.length, responsiveWidths: SCREEN_SIZES.map(size => size.width) },
     screenshots, auditCases, findings
   }, null, 2), 'utf8')

@@ -5,6 +5,7 @@ from datetime import timedelta
 import hashlib
 from pathlib import Path
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ from app.models import RegistrationRequest, User
 from app.repositories.person_repository import PersonRepository
 from app.routers import admin, auth, family_units, genealogy, graph, persons, relationships
 from app.security import SESSION_COOKIE, UserSession, hash_password, session_hash, utc_now, verify_password
+from app import security
 
 PASSWORD = "session-test-password"
 
@@ -34,6 +36,9 @@ def password_hash():
 @pytest.fixture
 def session_api(password_hash, monkeypatch, tmp_path):
     """仅挂载路由到内存 SQLite，不启动真实应用、初始化真实库或发送邮件。"""
+    auth_settings = SimpleNamespace(auth_enabled=True)
+    monkeypatch.setattr(security, "get_settings", lambda: auth_settings)
+    monkeypatch.setattr(auth, "get_settings", lambda: auth_settings)
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 
     # 与生产数据库一样执行账号绑定和会话的外键约束。
@@ -91,6 +96,56 @@ def login_as(client, username="owner"):
 
 
 # --- Cookie 生命周期与身份真实性 --- #
+
+
+def test_local_testing_enters_as_admin_without_credentials(session_api):
+    """测试模式无 Cookie 直接读取、编辑，复用管理员且不改原密码或创建会话。"""
+    client, sessions, _app, _approval_mail, _result_mail = session_api
+    security.get_settings().auth_enabled = False
+    with sessions() as db:
+        original = db.scalar(select(User).where(User.username == "admin"))
+        original_hash = original.password
+        admin_id = original.id
+    response = client.get("/api/auth/me")
+    assert response.status_code == 200
+    assert response.json()["auth_enabled"] is False
+    assert response.json()["user"]["id"] == admin_id
+    assert response.json()["user"]["is_admin"] is True
+    assert client.get("/api/graph/overview").status_code == 200
+    assert client.get("/api/admin/graph-issues").status_code == 200
+    updated = client.put("/api/genealogy/persons/p:other/profile", json={"occupation": "本地测试职业"})
+    assert updated.status_code == 200
+    assert "set-cookie" not in response.headers
+    with sessions() as db:
+        assert db.get(User, admin_id).password == original_hash
+        assert list(db.scalars(select(UserSession))) == []
+
+
+def test_local_testing_bootstraps_an_empty_account_store(session_api):
+    """空库测试自动建立空账密身份，重复读取不会重复创建账号。"""
+    client, sessions, _app, _approval_mail, _result_mail = session_api
+    security.get_settings().auth_enabled = False
+    with sessions() as db:
+        db.query(User).delete()
+        db.commit()
+    first = client.get("/api/auth/me")
+    second = client.get("/api/auth/me")
+    assert first.status_code == second.status_code == 200
+    assert first.json()["user"]["id"] == second.json()["user"]["id"]
+    with sessions() as db:
+        users = list(db.scalars(select(User)))
+        assert len(users) == 1
+        assert users[0].username == users[0].password == users[0].email == ""
+
+
+def test_enabling_auth_restores_login_requirement(session_api):
+    """同一测试身份退出免登录模式后，必须重新提供有效登录会话。"""
+    client, _sessions, _app, _approval_mail, _result_mail = session_api
+    security.get_settings().auth_enabled = False
+    assert client.get("/api/auth/me").status_code == 200
+    security.get_settings().auth_enabled = True
+    assert client.get("/api/auth/me").status_code == 401
+    assert client.get("/api/graph/overview").status_code == 401
 
 
 @pytest.mark.parametrize("endpoint,parameter", [

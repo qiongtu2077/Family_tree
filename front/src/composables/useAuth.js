@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { getCurrentUser, login, logout, register } from '../api/auth'
 
 const isLoggedIn = ref(false)
+const authEnabled = ref(true)
 const isRegisterMode = ref(false)
 const currentUser = ref(null)
 const isCheckingAuth = ref(true)
@@ -33,7 +34,7 @@ function clearSession(message = '') {
 
 /** 仅在已有登录会话失效时展示重新登录提示。 */
 function handleSessionExpired() {
-  if (isLoggedIn.value) clearSession('登录状态已过期，请重新登录。')
+  if (authEnabled.value && isLoggedIn.value) clearSession('登录状态已过期，请重新登录。')
 }
 
 /** 提交登录表单，成功后只在内存中保存安全用户资料。 */
@@ -92,6 +93,7 @@ async function checkLoginStatus() {
   localStorage.removeItem('user')
   try {
     const response = await getCurrentUser()
+    authEnabled.value = response.auth_enabled !== false
     currentUser.value = response.user
     isLoggedIn.value = true
   } catch (error) {
@@ -103,6 +105,6 @@ async function checkLoginStatus() {
 
 /** 返回页面共用的认证状态与操作。 */
 export function useAuth() {
-  return { isLoggedIn, isRegisterMode, currentUser, isCheckingAuth, isSubmittingAuth, authError, authNotice,
+  return { isLoggedIn, authEnabled, isRegisterMode, currentUser, isCheckingAuth, isSubmittingAuth, authError, authNotice,
     isAdmin, loginForm, registerForm, handleLogin, handleRegister, handleLogout, checkLoginStatus, handleSessionExpired }
 }

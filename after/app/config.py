@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     app_name: str = "族谱查询系统 API"
     debug: bool = False
+    auth_enabled: bool = True
     database_url: str = ""
     postgres_host: str = "127.0.0.1"
     postgres_port: int = 5432

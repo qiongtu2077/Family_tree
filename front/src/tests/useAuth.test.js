@@ -16,6 +16,18 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('authenticated session state', () => {
+  it('enters local testing without credentials and keeps test access after expiry events', async () => {
+    api.getCurrentUser.mockResolvedValue({ auth_enabled: false, user: { id: 1, is_admin: true } })
+    await auth.checkLoginStatus()
+    expect(auth.authEnabled.value).toBe(false)
+    expect(auth.isLoggedIn.value).toBe(true)
+    expect(auth.isAdmin.value).toBe(true)
+    expect(auth.loginForm.value).toEqual({ username: '', password: '' })
+    expect(api.login).not.toHaveBeenCalled()
+    auth.handleSessionExpired()
+    expect(auth.isLoggedIn.value).toBe(true)
+  })
+
   it('restores only the user returned by the server session', async () => {
     api.getCurrentUser.mockResolvedValue({ user: { id: 3, username: 'owner', is_admin: false } })
     await auth.checkLoginStatus()

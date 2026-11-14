@@ -8,7 +8,8 @@ services:
     environment:
       POSTGRES_DB: familytree
       POSTGRES_USER: familytree
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your shell or deploy/.env}
+      # 本机测试数据库不要求填写账号密码。
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       # PostgreSQL 18 使用版本子目录，挂载父目录以持久化整个实例。
       - postgres_data:/var/lib/postgresql
